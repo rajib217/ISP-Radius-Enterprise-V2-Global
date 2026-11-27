@@ -3,7 +3,8 @@
 ## Baseline
 
 - Target: PostgreSQL 16 or newer.
-- `0001_core.sql` is the initial schema for an empty database.
+- Apply `0001_core.sql`, `0002_accounting_events.sql`, and `0003_subscriber_sessions.sql` in filename order.
+- These migrations assume an empty database for the baseline.
 - Take and verify a backup before applying migrations to any non-empty environment.
 - Apply each migration once, in filename order, using a database role limited to schema changes.
 - The application role should not own tables or have permission to bypass tenant-scoped service access.
@@ -18,6 +19,12 @@ Money uses `NUMERIC(19,4)`, never floating point. A posted journal is checked at
 
 Post in one database transaction: insert draft header, insert all lines, update status to `posted`, then commit. A failure rolls back the entire transaction. A reversal workflow must also lock and verify the original journal, ensure it has not already been reversed, insert the reversing draft, and update the original state atomically.
 
+## Accounting event and session lifecycle
+
+Migration 0002 stores normalized accounting events with tenant-scoped idempotency. Migration 0003 adds the current subscriber-session projection, keyed by tenant, NAS identifier, and RADIUS session ID. Start, Interim-Update, and Stop events are applied in the same caller-owned transaction as the event insert. Older events cannot move the projection backwards, and a stopped session is terminal for that session key. Interim-Update received before Start can create an active projection with an unknown start time.
+
+The repository adapter leaves commit/rollback to the caller. If projection update fails, the caller must roll back the transaction so the event insert is not committed alone.
+
 ## Important scope
 
-This is a foundational schema, not a complete billing or statutory accounting implementation. It does not yet include invoices, payment allocation, taxes, fiscal-period close, audit actor records, RADIUS accounting-event storage, or a migration runner. Migration 0002 adds normalized accounting event persistence with tenant-scoped idempotency. The repository adapter leaves commit/rollback to the caller so event insertion can be combined atomically with session projection updates. Production deployment still requires integration tests against PostgreSQL and a supported DB-API driver. Validate the SQL against the exact PostgreSQL version in staging before production use.
+This is a foundational schema, not a complete billing or statutory accounting implementation. It does not yet include invoices, payment allocation, taxes, fiscal-period close, audit actor records, a production RADIUS listener, or a migration runner. Production deployment still requires integration tests against PostgreSQL and a supported DB-API driver. Validate SQL, locking behavior, and concurrent event ingestion against the exact PostgreSQL version in staging before production use.
