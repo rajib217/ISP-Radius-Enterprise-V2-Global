@@ -138,7 +138,7 @@ END;
 $$;
 
 CREATE CONSTRAINT TRIGGER journal_posting_balance_check
-AFTER INSERT OR UPDATE OF status ON journal_entries
+AFTER INSERT OR UPDATE ON journal_entries
 DEFERRABLE INITIALLY DEFERRED
 FOR EACH ROW EXECUTE FUNCTION assert_posted_journal_balanced();
 
