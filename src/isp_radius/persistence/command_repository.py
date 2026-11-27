@@ -19,7 +19,9 @@ class LeasedRadiusCommand:
     lease_token: str
 
 
-def lease_pending_commands(connection, *, limit: int = 10, lease_seconds: int = 30, max_attempts: int = 8):
+def lease_pending_commands(
+    connection, *, limit: int = 10, lease_seconds: int = 30, max_attempts: int = 8
+):
     """Claim due dynamic-authorization requests without blocking peer workers."""
     if not 1 <= limit <= 100:
         raise ValueError("limit must be between 1 and 100")
@@ -94,8 +96,6 @@ def finish_leased_command(
     if error_code is not None and (len(error_code) > 64 or not error_code.isascii()):
         raise ValueError("error_code must be at most 64 ASCII characters")
     new_status = "pending" if outcome == "retry" else outcome
-    if not 1 <= max_attempts <= 50:
-        raise ValueError("max_attempts must be between 1 and 50")
     cursor = connection.cursor()
     try:
         cursor.execute(
@@ -126,24 +126,32 @@ def finish_leased_command(
 
 def requeue_expired_command_leases(connection, *, max_attempts: int = 8) -> int:
     """Recover abandoned claims and terminally fail requests out of retry budget."""
+    if not 1 <= max_attempts <= 50:
+        raise ValueError("max_attempts must be between 1 and 50")
     cursor = connection.cursor()
     try:
         cursor.execute(
             """
-            UPDATE dynamic_authorization_requests
-               SET status = CASE WHEN attempt_count >= LEAST(max_attempts, %s)
-                                 THEN 'failed' ELSE 'pending' END,
+            WITH expired AS (
+                SELECT tenant_id, id,
+                       attempt_count >= LEAST(max_attempts, %s) AS exhausted
+                  FROM dynamic_authorization_requests
+                 WHERE status = 'processing' AND lease_expires_at < now()
+                 FOR UPDATE SKIP LOCKED
+            )
+            UPDATE dynamic_authorization_requests AS q
+               SET status = CASE WHEN expired.exhausted THEN 'failed' ELSE 'pending' END,
                    lease_token = NULL,
                    lease_expires_at = NULL,
                    next_attempt_at = now(),
-                   completed_at = CASE WHEN attempt_count >= max_attempts
-                                       THEN now() ELSE NULL END,
-                   last_error_code = CASE WHEN attempt_count >= max_attempts
+                   completed_at = CASE WHEN expired.exhausted THEN now() ELSE NULL END,
+                   last_error_code = CASE WHEN expired.exhausted
                                           THEN 'max_attempts_worker_lease_expired'
                                           ELSE 'worker_lease_expired' END,
                    updated_at = now()
-             WHERE status = 'processing' AND lease_expires_at < now()
-            RETURNING id
+              FROM expired
+             WHERE q.tenant_id = expired.tenant_id AND q.id = expired.id
+            RETURNING q.id
             """,
             (max_attempts,),
         )

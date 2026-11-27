@@ -38,7 +38,7 @@ class FakeConnection:
 
 def test_lease_uses_dynamic_authorization_outbox_and_skip_locked():
     cursor = FakeCursor()
-    assert lease_pending_commands(FakeConnection(cursor), limit=10, lease_seconds=30) == []
+    assert lease_pending_commands(FakeConnection(cursor), limit=10, lease_seconds=30, max_attempts=7) == []
     sql, params = cursor.executed[0]
     assert "dynamic_authorization_requests" in sql
     assert "FOR UPDATE SKIP LOCKED" in sql
@@ -52,10 +52,10 @@ def test_lease_maps_coa_to_transport_command_type():
         uuid4(), uuid4(), "nas-1", "sess-1", "user-1", "coa",
         {"Mikrotik-Rate-Limit": "1000/2000"}, 2,
     )])
-    leased = lease_pending_commands(FakeConnection(cursor))
+    leased = lease_pending_commands(FakeConnection(cursor), max_attempts=6)
     assert leased[0].command_type == "change_bandwidth"
     assert leased[0].attempts == 2
-    assert leased[0].attributes == {"Mikrotik-Rate-Limit": "1000/2000"}
+    assert leased[0].attributes == {"Mikrotik-Rate-Limit": "1000/2000"}\n    assert cursor.executed[0][1][0] == 6
 
 
 @pytest.mark.parametrize("limit,seconds", [(0, 30), (101, 30), (1, 4), (1, 301)])
