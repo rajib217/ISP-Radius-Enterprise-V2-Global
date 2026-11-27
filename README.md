@@ -11,7 +11,7 @@ Vendor-neutral AAA and ISP network operations platform. This is a separate V2 co
 - Vendor adapters for BNGs/routers and separate OLT/ONU management.
 - Billing/payment integration through versioned APIs and events.
 - RBAC, audit, secret management, HA, observability and recoverable backups.
-- Deployable on-premises first, with an architecture that can support managed/SaaS deployments.
+- On-premises deployment first, with architecture that can support managed/SaaS deployments.
 
 ## Architecture rules
 1. Keep the AAA domain independent of vendor-specific code.
@@ -38,7 +38,8 @@ python -m venv .venv
 . .venv/bin/activate
 pip install -e '.[dev]'
 pytest
+ruff check src tests
 ```
 
 ## License
-License selection is pending dependency and distribution review. Do not assume an open-source license until a license file is added.
+Apache License 2.0. See [LICENSE](LICENSE).
