@@ -118,6 +118,59 @@ def test_all_migrations_and_accounting_session_lifecycle():
         with connection.transaction():
             assert record_accounting_event(connection, tenant_id=tenant_id, event=interim)
 
+        # The NAS inventory name must match the canonical accounting NAS identity.
+        coa_nas_id = str(uuid4())
+        connection.execute(
+            """
+            INSERT INTO nas_devices (id, tenant_id, name, role, protocol, address, radius_profile)
+            VALUES (%s, %s, 'integration-bng', 'bng', 'radius_udp', '192.0.2.56', 'mikrotik')
+            """,
+            (coa_nas_id, tenant_id),
+        )
+        from isp_radius.aaa.dynamic_authorization_service import (
+            enqueue_bandwidth_coa,
+            enqueue_disconnect,
+        )
+
+        with connection.transaction():
+            disconnect = enqueue_disconnect(
+                connection,
+                tenant_id=tenant_id,
+                nas_identifier="integration-bng",
+                session_id="integration-session",
+                username="integration-subscriber",
+                idempotency_key="integration-disconnect-001",
+                requested_by="integration-operator",
+            )
+            coa = enqueue_bandwidth_coa(
+                connection,
+                tenant_id=tenant_id,
+                nas_identifier="integration-bng",
+                session_id="integration-session",
+                username="integration-subscriber",
+                download_bps=20_000_000,
+                upload_bps=5_000_000,
+                idempotency_key="integration-coa-001",
+                requested_by="integration-operator",
+            )
+        assert disconnect.request_type.value == "disconnect"
+        assert coa.attributes == {"Mikrotik-Rate-Limit": "5000000/20000000"}
+
+        outbox_rows = connection.execute(
+            """
+            SELECT request_type, attributes, status
+              FROM dynamic_authorization_requests
+             WHERE tenant_id = %s
+             ORDER BY request_type
+            """,
+            (tenant_id,),
+        ).fetchall()
+        assert len(outbox_rows) == 2
+        assert outbox_rows[0][0] == "coa"
+        assert outbox_rows[0][1] == {"Mikrotik-Rate-Limit": "5000000/20000000"}
+        assert outbox_rows[0][2] == "pending"
+        assert outbox_rows[1] == ("disconnect", {}, "pending")
+
         # A delayed Start fills the unknown start time without rewinding counters/time.
         start = _event("Start", base, 100)
         with connection.transaction():
