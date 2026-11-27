@@ -60,29 +60,29 @@ def main(argv: list[str] | None = None) -> int:
             connection.cursor() as cursor,
         ):
                 cursor.execute(
-                    """
-                    SELECT 1
-                      FROM subscribers
-                     WHERE tenant_id = %s AND id = %s
-                     FOR UPDATE
-                    """,
-                    (args.tenant_id, args.subscriber_id),
-                )
-                if cursor.fetchone() is None:
-                    print("Subscriber was not found in the specified tenant.", file=sys.stderr)
-                    return 1
-                cursor.execute(
-                    """
-                    INSERT INTO subscriber_credentials (
-                        tenant_id, subscriber_id, password_hash, password_changed_at
-                    ) VALUES (%s, %s, %s, now())
-                    ON CONFLICT (tenant_id, subscriber_id)
-                    DO UPDATE SET
-                        password_hash = EXCLUDED.password_hash,
-                        password_changed_at = now()
-                    """,
-                    (args.tenant_id, args.subscriber_id, password_hash),
-                )
+                """
+                SELECT 1
+                  FROM subscribers
+                 WHERE tenant_id = %s AND id = %s
+                 FOR UPDATE
+                """,
+                (args.tenant_id, args.subscriber_id),
+            )
+            if cursor.fetchone() is None:
+                print("Subscriber was not found in the specified tenant.", file=sys.stderr)
+                return 1
+            cursor.execute(
+                """
+                INSERT INTO subscriber_credentials (
+                    tenant_id, subscriber_id, password_hash, password_changed_at
+                ) VALUES (%s, %s, %s, now())
+                ON CONFLICT (tenant_id, subscriber_id)
+                DO UPDATE SET
+                    password_hash = EXCLUDED.password_hash,
+                    password_changed_at = now()
+                """,
+                (args.tenant_id, args.subscriber_id, password_hash),
+            )
     except psycopg.Error:
         print("Database operation failed; no password details were logged.", file=sys.stderr)
         return 1
