@@ -38,3 +38,36 @@ NAS firmware, vendor-specific CoA acceptance, and exact attribute direction
 must be validated against each model/firmware in a lab before production.
 This code does not yet include a long-running worker service, RadSec, or live
 hardware interoperability tests.
+
+
+## Background worker
+
+Install the package and run `isp-radius-command-worker` under systemd, a
+container supervisor, or another process manager. Apply migrations through
+`0010_radius_command_retry_policy.sql` first. The worker leases rows in a
+short committed transaction, performs UDP I/O outside that transaction, and
+then finalizes the row using its lease token.
+
+Environment settings:
+
+- `DATABASE_URL` (required)
+- `RADIUS_NAS_<NAME>` secret variables referenced as `env:RADIUS_NAS_<NAME>`
+- `RADIUS_WORKER_BATCH_SIZE` (default 10)
+- `RADIUS_WORKER_POLL_INTERVAL` (default 1 second)
+- `RADIUS_WORKER_LEASE_SECONDS` (default 30)
+- `RADIUS_COA_TIMEOUT_SECONDS` (default 2)
+- `RADIUS_COA_TRANSPORT_RETRIES` (default 2)
+- `RADIUS_COMMAND_MAX_ATTEMPTS` (default 8)
+- `RADIUS_COMMAND_RETRY_BASE_SECONDS` (default 5)
+- `RADIUS_COMMAND_RETRY_MAX_SECONDS` (default 900)
+
+A NAS NAK and invalid endpoint/secret configuration are terminal failures.
+Timeouts and transient I/O errors use bounded exponential backoff. Expired
+leases are recovered after worker crashes. Shutdown responds to SIGTERM/SIGINT.
+The outbox records the final state and a safe error code, never a shared secret.
+
+The worker is at-least-once: a worker can crash after the NAS processes a
+request but before the database records its ACK. Therefore a retry may send a
+duplicate request. Commands target the same username/session tuple; validate
+vendor behavior and operational idempotency in a lab. The lease duration must
+exceed the configured transport timeout/retry budget.
