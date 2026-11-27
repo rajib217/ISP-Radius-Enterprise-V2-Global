@@ -1,0 +1,9 @@
+# Minimal dictionary for the attributes emitted by this application.
+ATTRIBUTE User-Name 1 string
+ATTRIBUTE NAS-IP-Address 4 ipaddr
+ATTRIBUTE Acct-Session-Id 44 string
+ATTRIBUTE Error-Cause 101 integer
+ATTRIBUTE WISPr-Bandwidth-Max-Up 7 integer
+ATTRIBUTE WISPr-Bandwidth-Max-Down 8 integer
+VENDOR Mikrotik 14988
+ATTRIBUTE Mikrotik-Rate-Limit 8 string Mikrotik
