@@ -32,6 +32,10 @@ def main(argv: list[str] | None = None) -> int:
     )
     args = parser.parse_args(argv)
 
+    if not sys.stdin.isatty() or not sys.stderr.isatty():
+        print("Run this command from an interactive terminal so password input stays hidden.", file=sys.stderr)
+        return 2
+
     password = getpass.getpass("New subscriber password (input hidden): ")
     confirmation = getpass.getpass("Confirm password (input hidden): ")
     if password != confirmation:
