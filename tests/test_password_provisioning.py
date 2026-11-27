@@ -56,8 +56,6 @@ def test_password_cli_updates_only_hash_for_tenant_subscriber(monkeypatch, capsy
     monkeypatch.setattr(provision_subscriber.sys.stdin, "isatty", lambda: True)
     monkeypatch.setattr(provision_subscriber.sys.stderr, "isatty", lambda: True)
     tenant_id, subscriber_id = str(uuid4()), str(uuid4())
-    monkeypatch.setattr(provision_subscriber.sys.stdin, "isatty", lambda: True)
-    monkeypatch.setattr(provision_subscriber.sys.stderr, "isatty", lambda: True)
     prompts = iter(["a-strong-ppp-password", "a-strong-ppp-password"])
     monkeypatch.setattr(provision_subscriber.getpass, "getpass", lambda _prompt: next(prompts))
     monkeypatch.setenv("DATABASE_URL", "postgresql://test")
