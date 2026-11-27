@@ -1,0 +1,10 @@
+# Copy into clients.conf and replace the documentation IP and secret.
+# Use a unique, randomly generated secret for every NAS.
+client example_bng {
+    ipaddr = 192.0.2.10
+    secret = "REPLACE_WITH_A_LONG_RANDOM_SECRET"
+    require_message_authenticator = yes
+    limit {
+        max_connections = 16
+    }
+}
