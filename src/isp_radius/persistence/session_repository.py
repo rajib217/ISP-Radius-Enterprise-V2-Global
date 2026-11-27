@@ -18,7 +18,6 @@ INSERT INTO subscriber_sessions (
     session_seconds, terminate_cause
 ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
 ON CONFLICT (tenant_id, nas_identifier, session_id) DO UPDATE SET
-    username = EXCLUDED.username,
     status = CASE WHEN EXCLUDED.status = 'stopped' THEN 'stopped'
                   ELSE subscriber_sessions.status END,
     started_at = COALESCE(subscriber_sessions.started_at, EXCLUDED.started_at),
@@ -32,6 +31,7 @@ ON CONFLICT (tenant_id, nas_identifier, session_id) DO UPDATE SET
     terminate_cause = COALESCE(EXCLUDED.terminate_cause, subscriber_sessions.terminate_cause),
     updated_at = now()
 WHERE subscriber_sessions.status = 'active'
+  AND subscriber_sessions.username = EXCLUDED.username
   AND (
       EXCLUDED.status = 'stopped'
       OR EXCLUDED.last_event_at >= subscriber_sessions.last_event_at

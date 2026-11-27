@@ -15,13 +15,13 @@ DATABASE_URL = os.getenv("DATABASE_URL")
 pytestmark = pytest.mark.skipif(not DATABASE_URL, reason="DATABASE_URL is not configured")
 
 
-def _event(status, event_time, input_octets):
+def _event(status, event_time, input_octets, username="integration-subscriber"):
     from isp_radius.aaa.accounting import AccountingEvent, AccountingStatus
 
     return AccountingEvent(
         nas_id="integration-bng",
         session_id="integration-session",
-        username="integration-subscriber",
+        username=username,
         status=AccountingStatus(status),
         event_time=event_time,
         input_octets=input_octets,
@@ -178,6 +178,18 @@ def test_all_migrations_and_accounting_session_lifecycle():
         with connection.transaction():
             assert not record_accounting_event(connection, tenant_id=tenant_id, event=start)
 
+        # A reused NAS/session key must never let another username overwrite
+        # the established session projection or its usage counters.
+        conflicting_owner = _event(
+            "Interim-Update",
+            base + timedelta(seconds=25),
+            999,
+            username="different-subscriber",
+        )
+        with connection.transaction():
+            assert record_accounting_event(
+                connection, tenant_id=tenant_id, event=conflicting_owner
+            )
         stale = _event("Interim-Update", base + timedelta(seconds=10), 175)
         with connection.transaction():
             assert record_accounting_event(connection, tenant_id=tenant_id, event=stale)
@@ -214,6 +226,6 @@ def test_all_migrations_and_accounting_session_lifecycle():
             "SELECT COUNT(*) FROM accounting_events WHERE tenant_id = %s",
             (tenant_id,),
         ).fetchone()
-        assert counts[0] == 5
+        assert counts[0] == 6
     finally:
         connection.close()
