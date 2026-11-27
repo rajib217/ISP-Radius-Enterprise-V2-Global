@@ -1,10 +1,12 @@
 """Reliable background dispatcher for the durable RADIUS command outbox."""
 from __future__ import annotations
 
+import json
 import logging
 import os
 import signal
 import time
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from dataclasses import dataclass
 from typing import Callable
 
@@ -43,6 +45,7 @@ class WorkerConfig:
     retry_base_seconds: int = 5
     retry_max_seconds: int = 900
     recovery_interval: float = 15.0
+    health_port: int = 9811
 
     def __post_init__(self) -> None:
         if not self.database_url:
@@ -66,6 +69,8 @@ class WorkerConfig:
             raise ValueError("retry backoff bounds are invalid")
         if not 1 <= self.recovery_interval <= 300:
             raise ValueError("recovery_interval must be between 1 and 300 seconds")
+        if not 1 <= self.health_port <= 65535:
+            raise ValueError("health_port must be between 1 and 65535")
 
 
 def config_from_environment() -> WorkerConfig:
@@ -94,6 +99,7 @@ def config_from_environment() -> WorkerConfig:
         retry_base_seconds=integer("RADIUS_COMMAND_RETRY_BASE_SECONDS", 5),
         retry_max_seconds=integer("RADIUS_COMMAND_RETRY_MAX_SECONDS", 900),
         recovery_interval=number("RADIUS_WORKER_RECOVERY_INTERVAL", 15.0),
+        health_port=integer("RADIUS_WORKER_HEALTH_PORT", 9811),
     )
 
 
@@ -121,6 +127,10 @@ class RadiusCommandWorker:
             retries=config.transport_retries,
         )
         self._last_recovery = 0.0
+        self.last_cycle_at = 0.0
+        self.last_cycle_ok = False
+        self.total_processed = 0
+        self.total_cycle_errors = 0
 
     def _lease_batch(self) -> list[LeasedRadiusCommand]:
         # Commit leases before network I/O so another worker sees the lease.
@@ -245,8 +255,14 @@ class RadiusCommandWorker:
             started = time.monotonic()
             try:
                 processed = self.run_once()
-            except (psycopg.Error, OSError):
+                self.last_cycle_at = time.monotonic()
+                self.last_cycle_ok = True
+                self.total_processed += processed
+            except Exception:
                 logger.exception("radius_command_worker_cycle_failed")
+                self.last_cycle_at = time.monotonic()
+                self.last_cycle_ok = False
+                self.total_cycle_errors += 1
                 processed = 0
             if processed == 0:
                 remaining = self.config.poll_interval - (time.monotonic() - started)
@@ -255,7 +271,62 @@ class RadiusCommandWorker:
         logger.info("radius_command_worker_stopped")
 
 
+
+class JsonLogFormatter(logging.Formatter):
+    """Write structured JSON records to stdout for journald and log collectors."""
+    def format(self, record: logging.LogRecord) -> str:
+        item = {"timestamp": self.formatTime(record, "%Y-%m-%dT%H:%M:%S"),
+                "level": record.levelname, "logger": record.name,
+                "message": record.getMessage()}
+        if record.exc_info:
+            item["exception"] = self.formatException(record.exc_info)
+        return json.dumps(item, ensure_ascii=False, separators=(",", ":"))
+
+def configure_logging() -> None:
+    handler = logging.StreamHandler()
+    handler.setFormatter(JsonLogFormatter())
+    root = logging.getLogger()
+    root.handlers.clear()
+    root.addHandler(handler)
+    root.setLevel(os.environ.get("LOG_LEVEL", "INFO").upper())
+
+def start_health_server(worker: RadiusCommandWorker) -> ThreadingHTTPServer:
+    class Handler(BaseHTTPRequestHandler):
+        def respond(self, code: int, body: str, content_type: str = "application/json") -> None:
+            data = body.encode("utf-8")
+            self.send_response(code)
+            self.send_header("Content-Type", content_type)
+            self.send_header("Content-Length", str(len(data)))
+            self.end_headers()
+            self.wfile.write(data)
+        def do_GET(self) -> None:
+            age = time.monotonic() - worker.last_cycle_at
+            ready = worker.last_cycle_ok and age <= max(30, worker.config.recovery_interval * 3)
+            if self.path == "/health/live":
+                self.respond(200, json.dumps({"status": "alive"}))
+            elif self.path == "/health/ready":
+                self.respond(200 if ready else 503, json.dumps({"status": "ready" if ready else "not_ready"}))
+            elif self.path == "/metrics":
+                body = ("# TYPE isp_radius_worker_processed_total counter\\n"
+                        f"isp_radius_worker_processed_total {worker.total_processed}\\n"
+                        "# TYPE isp_radius_worker_cycle_errors_total counter\\n"
+                        f"isp_radius_worker_cycle_errors_total {worker.total_cycle_errors}\\n"
+                        "# TYPE isp_radius_worker_ready gauge\\n"
+                        f"isp_radius_worker_ready {1 if ready else 0}\\n")
+                self.respond(200, body, "text/plain; version=0.0.4; charset=utf-8")
+            else:
+                self.respond(404, json.dumps({"error": "not_found"}))
+        def log_message(self, fmt: str, *args) -> None:
+            logger.debug("health_http %s", fmt % args)
+    server = ThreadingHTTPServer(("127.0.0.1", worker.config.health_port), Handler)
+    server.daemon_threads = True
+    import threading
+    threading.Thread(target=server.serve_forever, name="worker-health", daemon=True).start()
+    logger.info("worker_health_listener_started port=%d", worker.config.health_port)
+    return server
+
 def main() -> int:
+    configure_logging()
     config = config_from_environment()
     pool = ConnectionPool(
         conninfo=config.database_url,
@@ -276,7 +347,12 @@ def main() -> int:
     pool.open(wait=True, timeout=10)
     try:
         worker = RadiusCommandWorker(pool=pool, config=config)
-        worker.run_forever(should_stop=lambda: stop)
+        health_server = start_health_server(worker)
+        try:
+            worker.run_forever(should_stop=lambda: stop)
+        finally:
+            health_server.shutdown()
+            health_server.server_close()
     finally:
         pool.close()
     return 0

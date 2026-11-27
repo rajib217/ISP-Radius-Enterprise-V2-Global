@@ -69,3 +69,15 @@ request but before the database records its ACK. Therefore a retry may send a
 duplicate request. Commands target the same username/session tuple; validate
 vendor behavior and operational idempotency in a lab. The lease duration must
 exceed the configured transport timeout/retry budget.
+
+
+## Health, metrics and production logs
+
+The worker exposes loopback-only endpoints on 127.0.0.1:9811 by default:
+- GET /health/live: process is responding.
+- GET /health/ready: 200 after a successful worker cycle; 503 when a cycle fails or becomes stale.
+- GET /metrics: basic Prometheus counters for processed commands, cycle errors and readiness.
+
+Scrape metrics through a local Prometheus agent or private monitoring network. Never expose this unauthenticated listener to the public internet. Alert on systemd restarts, readiness failures, rising cycle errors, queue backlog/age, and sustained failed/rejected commands. Liveness does not prove NAS reachability.
+
+Worker logs are structured JSON on stdout and collected by journald. Use journalctl -u isp-radius-command-worker to inspect them. Do not log subscriber passwords, RADIUS shared secrets, full request payloads or credential material. Set LOG_LEVEL=INFO in production.
