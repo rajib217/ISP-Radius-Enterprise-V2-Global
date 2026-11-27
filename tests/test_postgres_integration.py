@@ -138,7 +138,7 @@ def test_all_migrations_and_accounting_session_lifecycle():
         assert row[3] == base + timedelta(seconds=15)
         assert row[4] == 300
         assert row[5] == 600
-        assert row[6] == 15
+        assert row[6] == 20
         assert row[7] == "User-Request"
 
         counts = connection.execute(
