@@ -20,12 +20,12 @@ On Debian/Ubuntu, install FreeRADIUS 3.2 and its REST module using the distribut
 2. Install V2 API dependencies: `pip install -e .`.
 3. Set `DATABASE_URL` in a protected service environment. Use a dedicated PostgreSQL application role with only the required SELECT permissions for authentication tables.
 4. Optionally set `DB_POOL_MIN_SIZE` (default 1) and `DB_POOL_MAX_SIZE` (default 10). Values must be integers satisfying `1 <= min <= max <= 100`. Each API worker owns its own pool, so size the aggregate across all workers against PostgreSQL's connection limit.
-5. Run the API behind a TLS reverse proxy. Bind the application server to loopback or a private interface only. Do not expose the HTTP backend publicly.
-6. Install mods-available/rest_isp_radius into FreeRADIUS mods-available and enable it with: `ln -s ../mods-available/rest_isp_radius /etc/freeradius/3.0/mods-enabled/rest_isp_radius`.
-7. Copy the authentication fragment from sites-available/isp-radius-auth into the existing sites-enabled/default virtual server authorize and authenticate sections. Do not replace the complete default server with this fragment.
-8. Add each BNG/NAS separately to clients.conf. Generate a unique high-entropy shared secret per device. Never use the example secret.
-9. Store the API CA certificate at the configured path and verify the API certificate hostname.
-10. Configure each subscriber with an Argon2id hash in subscriber_credentials; never insert a cleartext password.
+7. Run the API behind a TLS reverse proxy. Bind the application server to loopback or a private interface only. Do not expose the HTTP backend publicly.
+8. Install mods-available/rest_isp_radius into FreeRADIUS mods-available and enable it with: `ln -s ../mods-available/rest_isp_radius /etc/freeradius/3.0/mods-enabled/rest_isp_radius`.
+9. Copy the authentication fragment from sites-available/isp-radius-auth into the existing sites-enabled/default virtual server authorize and authenticate sections. Do not replace the complete default server with this fragment.
+10. Add each BNG/NAS separately to clients.conf. Generate a unique high-entropy shared secret per device. Never use the example secret.
+11. Store the API CA certificate at the configured path and verify the API certificate hostname.
+12. Configure each subscriber with an Argon2id hash in subscriber_credentials; never insert a cleartext password.
 
 ## Validate
 
