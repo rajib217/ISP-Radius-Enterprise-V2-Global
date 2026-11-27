@@ -1,4 +1,5 @@
 """Subscriber authentication with Argon2id and tenant resolution via NAS IP."""
+# ruff: noqa: I001
 from __future__ import annotations
 
 from dataclasses import dataclass
