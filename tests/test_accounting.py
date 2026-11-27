@@ -1,4 +1,4 @@
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 
 import pytest
 
@@ -81,6 +81,13 @@ def test_event_model_rejects_negative_counters():
             session_id="s1",
             username="u1",
             status=AccountingStatus.STOP,
-            event_time=datetime.now(timezone.utc),
+            event_time=datetime.now(UTC),
             input_octets=-1,
         )
+
+
+def test_iso_timestamp_with_z_suffix_is_accepted():
+    attrs = sample_attributes()
+    attrs["Event-Timestamp"] = "2026-11-27T10:00:00Z"
+    event = normalize_accounting(attrs)
+    assert event.event_time == datetime(2026, 11, 27, 10, 0, tzinfo=UTC)
