@@ -42,3 +42,8 @@ Migration 0011 removes the unused experimental duplicate queue and adds fenced l
 ## Important scope
 
 This is a foundational schema, not a complete billing or statutory accounting implementation. It does not yet include invoices, payment allocation, taxes, fiscal-period close, production user/actor identity tables, a production RADIUS listener, or a migration runner. Validate SQL, locking behavior, and concurrent event ingestion against the exact PostgreSQL version in staging before production use.
+## Live subscriber session monitoring
+
+The read-only session monitoring repository provides tenant-scoped session pages and summary counts. It derives three display states from the current projection: online (active and recently updated), stale (active but the last accounting event exceeds the configurable threshold), and offline (stopped). The default stale threshold is 300 seconds and accepted values are 30 to 86400 seconds. Pages are bounded to 200 rows and support username/session search and exact NAS filtering. Duration uses the greater of the latest RADIUS Acct-Session-Time and elapsed wall-clock time from Start; when Start has not arrived, the reported duration falls back to the RADIUS session counter.
+
+A stale session is only an indication that accounting updates have stopped arriving. It is not proof of a disconnect. The monitoring repository deliberately does not mutate sessions, close stale sessions, enqueue Disconnect commands, or create billing entries. Do not expose these queries through an operator-facing HTTP route until operator authentication, tenant authorization, and RBAC are implemented.
