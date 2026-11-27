@@ -271,10 +271,10 @@ def test_all_migrations_and_accounting_session_lifecycle():
             connection, tenant_id=tenant_id, state="offline",
             search="integration-subscriber", stale_after_seconds=300,
         )
-        assert [item["id"] for item in online_rows] == [online_id]
+        assert [str(item["id"]) for item in online_rows] == [online_id]
         assert online_rows[0]["state"] == "online"
         assert online_rows[0]["duration_seconds"] >= 60
-        assert [item["id"] for item in stale_rows] == [stale_id]
+        assert [str(item["id"]) for item in stale_rows] == [stale_id]
         assert stale_rows[0]["state"] == "stale"
         assert [item["state"] for item in offline_rows] == ["offline"]
 
