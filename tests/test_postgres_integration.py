@@ -48,6 +48,55 @@ def test_all_migrations_and_accounting_session_lifecycle():
             """,
             (tenant_id, "Integration Tenant", f"it-{tenant_id[:8]}"),
         )
+        from isp_radius.aaa.authentication import (
+            authenticate_subscriber,
+            hash_subscriber_password,
+        )
+
+        plan_id = str(uuid4())
+        subscriber_id = str(uuid4())
+        nas_id = str(uuid4())
+        connection.execute(
+            """
+            INSERT INTO service_plans (
+                id, tenant_id, code, name, price, currency,
+                billing_period_days, download_bps, upload_bps
+            ) VALUES (%s, %s, 'BASIC', 'Basic 50M', 500, 'BDT', 30, 50000000, 10000000)
+            """,
+            (plan_id, tenant_id),
+        )
+        connection.execute(
+            """
+            INSERT INTO subscribers (id, tenant_id, username, full_name, status, service_plan_id)
+            VALUES (%s, %s, 'integration-user', 'Integration User', 'active', %s)
+            """,
+            (subscriber_id, tenant_id, plan_id),
+        )
+        connection.execute(
+            """
+            INSERT INTO nas_devices (id, tenant_id, name, role, protocol, address)
+            VALUES (%s, %s, 'integration-nas', 'bng', 'radius_udp', '192.0.2.55')
+            """,
+            (nas_id, tenant_id),
+        )
+        connection.execute(
+            """
+            INSERT INTO subscriber_credentials (tenant_id, subscriber_id, password_hash)
+            VALUES (%s, %s, %s)
+            """,
+            (tenant_id, subscriber_id, hash_subscriber_password("integration-secret")),
+        )
+        auth_result = authenticate_subscriber(
+            connection,
+            nas_ip="192.0.2.55",
+            username="integration-user",
+            password="integration-secret",
+        )
+        assert auth_result is not None
+        assert auth_result.tenant_id == tenant_id
+        assert auth_result.download_bps == 50_000_000
+        assert auth_result.upload_bps == 10_000_000
+
         base = datetime(2026, 11, 27, 10, 0, tzinfo=UTC)
         interim = _event("Interim-Update", base + timedelta(seconds=20), 250)
         with connection.transaction():
