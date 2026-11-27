@@ -135,7 +135,12 @@ class NasDevice:
         try:
             ip_address(self.address)
         except ValueError:
-            if not self.address or len(self.address) > 253 or any(
-                not part or len(part) > 63 for part in self.address.split(".")
+            hostname = self.address[:-1] if self.address.endswith(".") else self.address
+            labels = hostname.split(".")
+            label_pattern = re.compile(r"[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?")
+            if (
+                not hostname
+                or len(hostname) > 253
+                or any(not label_pattern.fullmatch(label) for label in labels)
             ):
                 raise ValueError("address must be a valid IP address or hostname")
