@@ -1,4 +1,5 @@
 """Subscriber authorization and Access-Accept reply policy lookup."""
+# ruff: noqa: I001
 from __future__ import annotations
 
 from dataclasses import dataclass
