@@ -1,13 +1,13 @@
 # FreeRADIUS 3.2.x integration
 
-This is the first supported integration slice: **PPPoE/PAP authentication through rlm_rest**. It does not yet implement CHAP, MS-CHAP, EAP, CoA/Disconnect, or forwarding accounting packets to the V2 accounting endpoint.
+This is the first supported integration slice: **PPPoE/PAP authentication and subscriber bandwidth authorization through rlm_rest**. It does not yet implement CHAP, MS-CHAP, EAP, CoA/Disconnect, or forwarding accounting packets to the V2 accounting endpoint.
 
 ## Flow
 
 1. FreeRADIUS validates the RADIUS client using its configured per-NAS shared secret.
 2. The rest_isp_radius module sends a URL-encoded POST over HTTPS to the V2 API.
 3. The API resolves the tenant from the packet source IP, checks that the NAS, subscriber, and service plan are enabled, then verifies the Argon2id password hash.
-4. HTTP 204 means Access-Accept; HTTP 401 means Access-Reject. Backend errors return 5xx and must fail closed.
+4. The authorize call returns JSON reply attributes for the NAS profile. HTTP 200 means authorization policy was found; HTTP 401 rejects unknown/inactive subscribers. The authenticate call uses HTTP 204 for Access-Accept and HTTP 401 for Access-Reject. Backend errors return 5xx and must fail closed.
 5. No cleartext subscriber password is stored in PostgreSQL.
 
 The API uses the RADIUS packet source IP rather than the client-supplied NAS-IP-Address attribute for tenant/NAS lookup. Configure the exact source IP in nas_devices.address. This initial direct-NAS mode does not support a RADIUS proxy or NAT layer that changes the source IP.
@@ -16,7 +16,7 @@ The API uses the RADIUS packet source IP rather than the client-supplied NAS-IP-
 
 On Debian/Ubuntu, install FreeRADIUS 3.2 and its REST module using the distribution package manager. Confirm that rlm_rest is available.
 
-1. Apply migrations 0001 through 0005 in order.
+1. Apply migrations 0001 through 0006 in order.
 2. Install V2 API dependencies: `pip install -e .`.
 3. Set `DATABASE_URL` in a protected service environment. Use a dedicated PostgreSQL application role with only the required SELECT permissions for authentication tables.
 4. Optionally set `DB_POOL_MIN_SIZE` (default 1) and `DB_POOL_MAX_SIZE` (default 10). Values must be integers satisfying `1 <= min <= max <= 100`. Each API worker owns its own pool, so size the aggregate across all workers against PostgreSQL's connection limit.
@@ -49,7 +49,7 @@ Do not enable production debug logging. Ensure access logs, reverse-proxy logs, 
 ## Current limitations
 
 - PAP only. The site fragment rejects requests without User-Password; do not enable CHAP/MS-CHAP/EAP until a compatible verifier is implemented and tested.
-- No authorization reply attributes (rate limits, framed IP, VLAN, IPv6 pools) are returned yet. Authentication success alone is not full subscriber provisioning.
+- Bandwidth reply attributes are implemented for explicit `generic_wispr` and `mikrotik` NAS profiles. MikroTik uses `Mikrotik-Rate-Limit` with client upload as RouterOS rx and download as tx. Framed IP, VLAN, IPv6 pools and per-device capability discovery remain pending.
 - No RADIUS Accounting-Request integration is wired to this API yet. Keep the existing accounting path until the accounting REST/SQL integration is implemented and validated.
 - NAS source-IP mapping assumes direct RADIUS packets and globally unambiguous tenant mapping. Proxy support needs trusted proxy identity and explicit tenant/NAS mapping.
 - The API uses a bounded per-worker PostgreSQL connection pool. Pool sizing must account for worker count and the PostgreSQL connection budget. Rate limiting, request metrics, and load tests remain required before high-volume production use.
