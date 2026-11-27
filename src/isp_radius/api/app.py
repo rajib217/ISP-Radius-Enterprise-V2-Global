@@ -18,11 +18,11 @@ from starlette.concurrency import run_in_threadpool
 from isp_radius.aaa.accounting import normalize_accounting
 from isp_radius.aaa.authentication import authenticate_subscriber
 from isp_radius.aaa.authorization import authorize_subscriber
-from isp_radius.persistence.session_repository import record_accounting_event_with_usage
 from isp_radius.persistence.session_monitoring_repository import (
     get_subscriber_session_summary,
     list_subscriber_sessions,
 )
+from isp_radius.persistence.session_repository import record_accounting_event_with_usage
 
 
 def _pool_sizes() -> tuple[int, int]:
