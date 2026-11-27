@@ -1,5 +1,3 @@
-from uuid import uuid4
-
 import pytest
 
 from isp_radius.aaa.authorization import authorize_subscriber
