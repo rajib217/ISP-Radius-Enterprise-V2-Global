@@ -3,7 +3,7 @@
 BEGIN;
 
 CREATE TABLE dynamic_authorization_requests (
-    id UUID PRIMARY KEY,
+    id UUID NOT NULL,
     tenant_id UUID NOT NULL,
     nas_identifier VARCHAR(253) NOT NULL,
     session_id VARCHAR(256) NOT NULL,
@@ -22,7 +22,7 @@ CREATE TABLE dynamic_authorization_requests (
     last_error_code VARCHAR(64),
     created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
     updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
-    PRIMARY KEY (id),
+    PRIMARY KEY (tenant_id, id),
     UNIQUE (tenant_id, idempotency_key),
     FOREIGN KEY (tenant_id, nas_identifier)
         REFERENCES nas_devices(tenant_id, name) ON DELETE RESTRICT,
@@ -67,8 +67,19 @@ BEGIN
 END;
 $$;
 
+CREATE FUNCTION prevent_dynamic_authorization_delete() RETURNS TRIGGER
+LANGUAGE plpgsql AS $$
+BEGIN
+    RAISE EXCEPTION 'Dynamic authorization audit records cannot be deleted';
+END;
+$$;
+
 CREATE TRIGGER dynamic_authorization_audit_immutable
 BEFORE UPDATE ON dynamic_authorization_requests
 FOR EACH ROW EXECUTE FUNCTION protect_dynamic_authorization_audit();
+
+CREATE TRIGGER dynamic_authorization_audit_no_delete
+BEFORE DELETE ON dynamic_authorization_requests
+FOR EACH ROW EXECUTE FUNCTION prevent_dynamic_authorization_delete();
 
 COMMIT;
