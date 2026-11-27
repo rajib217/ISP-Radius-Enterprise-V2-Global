@@ -3,7 +3,7 @@
 ## Baseline
 
 - Target: PostgreSQL 16 or newer.
-- Apply `0001_core.sql` through `0005_nas_auth_lookup_index.sql` in filename order.
+- Apply `0001_core.sql` through `0006_nas_radius_profile.sql` in filename order.
 - These migrations assume an empty database for the baseline.
 - Take and verify a backup before applying migrations to any non-empty environment.
 - Apply each migration once, in filename order, using a database role limited to schema changes.
@@ -25,6 +25,6 @@ Migration 0002 stores normalized accounting events with tenant-scoped idempotenc
 
 The repository adapter leaves commit/rollback to the caller. If projection update fails, the caller must roll back the transaction so the event insert is not committed alone.
 
-## Subscriber authentication\n\nMigration 0004 adds one Argon2id password hash per tenant-scoped subscriber. Migration 0005 indexes enabled NAS source addresses for authentication lookup. The authentication service resolves the tenant from the authenticated NAS packet source IP, requires the NAS, subscriber, and service plan to be enabled, and verifies the password hash in application memory. No plaintext password is stored. The initial FreeRADIUS integration is PAP-only over a protected REST/HTTPS channel. CHAP, MS-CHAP, EAP, reply-policy attributes, and accounting packet forwarding are not implemented yet.\n\n## Important scope
+## Subscriber authentication\n\nMigration 0004 adds one Argon2id password hash per tenant-scoped subscriber. Migration 0005 indexes enabled NAS source addresses for authentication lookup. Migration 0006 assigns each NAS an explicit RADIUS reply profile (`generic_wispr` or `mikrotik`) so vendor-specific attributes are selected deliberately. The authentication service resolves the tenant from the authenticated NAS packet source IP, requires the NAS, subscriber, and service plan to be enabled, and verifies the password hash in application memory. No plaintext password is stored. The initial FreeRADIUS integration is PAP-only over a protected REST/HTTPS channel. CHAP, MS-CHAP, EAP, reply-policy attributes, and accounting packet forwarding are not implemented yet.\n\n## Important scope
 
 This is a foundational schema, not a complete billing or statutory accounting implementation. It does not yet include invoices, payment allocation, taxes, fiscal-period close, audit actor records, a production RADIUS listener, or a migration runner. Production deployment still requires integration tests against PostgreSQL and a supported DB-API driver. Validate SQL, locking behavior, and concurrent event ingestion against the exact PostgreSQL version in staging before production use.
