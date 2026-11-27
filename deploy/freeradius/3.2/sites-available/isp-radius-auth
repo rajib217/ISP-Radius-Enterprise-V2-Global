@@ -1,0 +1,20 @@
+# Merge these sections into the existing sites-enabled/default virtual server.
+# This initial integration intentionally supports PAP only. CHAP/MS-CHAP/EAP
+# must not fall through to an unrelated password backend.
+
+authorize {
+    if (&User-Password) {
+        update control {
+            Auth-Type := rest_isp_radius
+        }
+    }
+    else {
+        reject
+    }
+}
+
+authenticate {
+    Auth-Type rest_isp_radius {
+        rest_isp_radius
+    }
+}
