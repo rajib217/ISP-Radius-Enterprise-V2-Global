@@ -19,16 +19,14 @@ separate TLS transport and certificate-validation implementation.
 
 ## Worker integration
 
-Call `dispatch_leased_command` for a leased outbox item. On a verified ACK,
+The worker consumes the same `dynamic_authorization_requests` outbox populated by the application service. It maps `coa` and `disconnect` requests to transport command types and supplies the session selectors required by RFC 5176. It calls `dispatch_leased_command` for each leased item. On a verified ACK,
 finish the lease as `acknowledged`. On `RadiusTransportTimeout`, schedule a
 bounded retry with `finish_leased_command(..., outcome="retry", ...)`. A
 `RadiusNegativeAcknowledgement` is a definitive NAS rejection and should be
 recorded as failed with its RFC 5176 Error-Cause code. Do not mark a command
 successful merely because a UDP datagram was sent.
 
-The transport has bounded timeout/retries. The outbox lease must exceed the
-maximum transport duration plus scheduling margin. Use one dispatcher process
-pool sized to the network and database capacity.
+The transport has bounded timeout/retries. The lease must cover the configured batch size multiplied by the maximum per-command transport duration, plus scheduling margin. The worker validates this at startup. Keep the batch and database pool sized for the NAS fleet.
 
 ## Compatibility and security limits
 
@@ -54,14 +52,14 @@ Environment settings:
 - `RADIUS_NAS_<NAME>` secret variables referenced as `env:RADIUS_NAS_<NAME>`
 - `RADIUS_WORKER_BATCH_SIZE` (default 10)
 - `RADIUS_WORKER_POLL_INTERVAL` (default 1 second)
-- `RADIUS_WORKER_LEASE_SECONDS` (default 30)
+- `RADIUS_WORKER_LEASE_SECONDS` (default 120)
 - `RADIUS_COA_TIMEOUT_SECONDS` (default 2)
 - `RADIUS_COA_TRANSPORT_RETRIES` (default 2)
 - `RADIUS_COMMAND_MAX_ATTEMPTS` (default 8)
 - `RADIUS_COMMAND_RETRY_BASE_SECONDS` (default 5)
 - `RADIUS_COMMAND_RETRY_MAX_SECONDS` (default 900)
 
-A NAS NAK and invalid endpoint/secret configuration are terminal failures.
+A NAS NAK is recorded as `rejected`; invalid endpoint/secret configuration is recorded as `failed`.
 Timeouts and transient I/O errors use bounded exponential backoff. Expired
 leases are recovered after worker crashes. Shutdown responds to SIGTERM/SIGINT.
 The outbox records the final state and a safe error code, never a shared secret.

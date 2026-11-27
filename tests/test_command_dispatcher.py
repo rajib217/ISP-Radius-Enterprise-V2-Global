@@ -17,7 +17,7 @@ from isp_radius.worker.command_dispatcher import (
 def config(**overrides):
     values = {
         "database_url": "postgresql://example",
-        "lease_seconds": 30,
+        "lease_seconds": 120,
         "transport_timeout": 2,
         "transport_retries": 2,
     }
@@ -62,9 +62,10 @@ class FakeContext:
         return False
 
 
-def test_worker_config_requires_lease_longer_than_transport():
+def test_worker_config_requires_lease_for_full_sequential_batch():
     with pytest.raises(ValueError):
-        config(lease_seconds=5)
+        config(lease_seconds=30, batch_size=10)
+    assert config(lease_seconds=120, batch_size=10)
 
 
 def test_retry_delay_is_exponential_and_bounded():
@@ -101,7 +102,7 @@ def test_nak_is_terminal_failure(monkeypatch):
     finished = []
     worker._finish = lambda cmd, **kwargs: finished.append(kwargs) or True
     worker._dispatch_one(command())
-    assert finished == [{"outcome": "failed", "error_code": "radius_nak_503"}]
+    assert finished == [{"outcome": "rejected", "error_code": "radius_nak_503"}]
 
 
 def test_missing_secret_or_endpoint_fails_without_retry(monkeypatch):

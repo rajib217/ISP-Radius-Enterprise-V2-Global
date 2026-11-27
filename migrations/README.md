@@ -3,7 +3,7 @@
 ## Baseline
 
 - Target: PostgreSQL 16 or newer.
-- Apply `0001_core.sql` through `0007_dynamic_authorization_outbox.sql` in filename order.
+- Apply every numbered migration from `0001_core.sql` through `0011_dynamic_authorization_worker_leases.sql` in filename order.
 - These migrations assume an empty database for the baseline.
 - Take and verify a backup before applying migrations to any non-empty environment.
 - Apply each migration once, in filename order, using a database role limited to schema changes.
@@ -33,7 +33,7 @@ Migration 0004 adds one Argon2id password hash per tenant-scoped subscriber. Mig
 
 Migration 0007 adds an immutable-intent, tenant-scoped outbox for CoA and Disconnect requests. New commands can only be enqueued for a matching active subscriber session and enabled NAS. An idempotency key prevents duplicate operator actions. The outbox stores no RADIUS shared secret. Command intent and terminal audit records cannot be edited or deleted by ordinary application updates.
 
-The current implementation creates outbox records only. The RFC 5176 packet worker, secure NAS secret retrieval, UDP transport, response authenticator/Message-Authenticator verification, claim leasing, retry/backoff, operator API authentication/RBAC, and live NAS tests remain pending. Do not represent an enqueued command as a completed disconnect or applied policy change.
+Migration 0011 adds fenced leases, retry budgets, and crash recovery to the same audited outbox populated by the application service. The background worker sends RFC 5176 requests over authenticated RADIUS/UDP and records ACK, NAK, timeout, or terminal failure. Operator API authentication/RBAC, RadSec, and live NAS tests remain pending. Do not represent an enqueued command as a completed disconnect or applied policy change.
 
 ## Important scope
 
