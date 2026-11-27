@@ -337,29 +337,29 @@ def start_health_server(worker: RadiusCommandWorker) -> ThreadingHTTPServer:
                         finally:
                             cursor.close()
                     body = (
-                        "# TYPE isp_radius_worker_processed_total counter\\n"
-                        f"isp_radius_worker_processed_total {worker.total_processed}\\n"
-                        "# TYPE isp_radius_worker_cycle_errors_total counter\\n"
-                        f"isp_radius_worker_cycle_errors_total {worker.total_cycle_errors}\\n"
-                        "# TYPE isp_radius_worker_ready gauge\\n"
-                        f"isp_radius_worker_ready {1 if ready else 0}\\n"
-                        "# TYPE isp_radius_worker_queue_pending gauge\\n"
-                        f"isp_radius_worker_queue_pending {pending}\\n"
-                        "# TYPE isp_radius_worker_queue_oldest_pending_seconds gauge\\n"
-                        f"isp_radius_worker_queue_oldest_pending_seconds {oldest}\\n"
-                        "# TYPE isp_radius_worker_queue_processing gauge\\n"
-                        f"isp_radius_worker_queue_processing {processing}\\n"
-                        "# TYPE isp_radius_worker_commands_failed_last_15m gauge\\n"
-                        f"isp_radius_worker_commands_failed_last_15m {failed_15m}\\n"
-                        "# TYPE isp_radius_worker_commands_rejected_last_15m gauge\\n"
-                        f"isp_radius_worker_commands_rejected_last_15m {rejected_15m}\\n"
+                        "# TYPE isp_radius_worker_processed_total counter\n"
+                        f"isp_radius_worker_processed_total {worker.total_processed}\n"
+                        "# TYPE isp_radius_worker_cycle_errors_total counter\n"
+                        f"isp_radius_worker_cycle_errors_total {worker.total_cycle_errors}\n"
+                        "# TYPE isp_radius_worker_ready gauge\n"
+                        f"isp_radius_worker_ready {1 if ready else 0}\n"
+                        "# TYPE isp_radius_worker_queue_pending gauge\n"
+                        f"isp_radius_worker_queue_pending {pending}\n"
+                        "# TYPE isp_radius_worker_queue_oldest_pending_seconds gauge\n"
+                        f"isp_radius_worker_queue_oldest_pending_seconds {oldest}\n"
+                        "# TYPE isp_radius_worker_queue_processing gauge\n"
+                        f"isp_radius_worker_queue_processing {processing}\n"
+                        "# TYPE isp_radius_worker_commands_failed_last_15m gauge\n"
+                        f"isp_radius_worker_commands_failed_last_15m {failed_15m}\n"
+                        "# TYPE isp_radius_worker_commands_rejected_last_15m gauge\n"
+                        f"isp_radius_worker_commands_rejected_last_15m {rejected_15m}\n"
                     )
                     self.respond(
                         200, body, "text/plain; version=0.0.4; charset=utf-8"
                     )
                 except Exception:
                     logger.exception("worker_metrics_collection_failed")
-                    self.respond(503, "metrics_unavailable\\n", "text/plain")
+                    self.respond(503, "metrics_unavailable\n", "text/plain")
             else:
                 self.respond(404, json.dumps({"error": "not_found"}))
 
