@@ -54,6 +54,10 @@ class DynamicAuthorizationRequest:
                 UUID(value)
             except (ValueError, TypeError, AttributeError) as exc:
                 raise ValueError(f"{field} must be a valid UUID") from exc
+        if not isinstance(self.request_type, DynamicAuthorizationType):
+            raise ValueError("request_type must be a supported DynamicAuthorizationType")
+        if not isinstance(self.attributes, dict):
+            raise ValueError("attributes must be a dictionary")
         for value, field in (
             (self.nas_identifier, "nas_identifier"),
             (self.session_id, "session_id"),
