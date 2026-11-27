@@ -83,7 +83,7 @@ def record_accounting_event(
     connection: accounting_repository.Connection,
     *,
     tenant_id: str,
-    event: aaa_accounting.AccountingEvent
+    event: aaa_accounting.AccountingEvent,
 ) -> bool:
     """Persist the event and update its projection in the caller's transaction.
 
