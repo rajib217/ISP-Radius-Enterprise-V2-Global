@@ -49,7 +49,7 @@ def ready(connection: psycopg.Connection = _database_dependency) -> dict[str, st
 @app.post("/radius/authenticate", status_code=status.HTTP_204_NO_CONTENT)
 async def radius_authenticate(
     request: Request,
-    connection: psycopg.Connection = Depends(_database_connection),
+    connection: psycopg.Connection = _database_dependency,
 ) -> Response:
     """Validate one PAP credential request sent over the protected REST channel."""
     raw_body = await request.body()
