@@ -1,11 +1,9 @@
-"""Tenant-scoped persistence and concurrency-safe leasing for RADIUS commands."""
+"""Tenant-scoped leasing and completion for the audited dynamic-authorization outbox."""
 from __future__ import annotations
 
 import json
 from dataclasses import dataclass
 from uuid import UUID, uuid4
-
-from isp_radius.aaa.coa import RadiusCommand
 
 
 @dataclass(frozen=True, slots=True)
@@ -21,53 +19,10 @@ class LeasedRadiusCommand:
     lease_token: str
 
 
-def enqueue_radius_command(connection, *, command: RadiusCommand) -> str | None:
-    """Queue only for a matching active session on an enabled NAS."""
-    tenant_id = str(UUID(command.tenant_id))
-    cursor = connection.cursor()
-    try:
-        cursor.execute(
-            """
-            SELECT s.id FROM subscriber_sessions AS s
-            JOIN nas_devices AS n ON n.tenant_id = s.tenant_id AND n.name = s.nas_identifier
-            WHERE s.tenant_id = %s AND s.nas_identifier = %s AND s.session_id = %s
-              AND s.username = %s AND s.status = 'active' AND n.enabled = TRUE
-            FOR UPDATE OF s
-            """,
-            (tenant_id, command.nas_identifier, command.session_id, command.username),
-        )
-        if cursor.fetchone() is None:
-            return None
-        command_id = str(uuid4())
-        cursor.execute(
-            """
-            INSERT INTO radius_command_outbox
-              (id, tenant_id, nas_identifier, session_id, username, command_type,
-               attributes, idempotency_key, status)
-            VALUES (%s, %s, %s, %s, %s, %s, %s::jsonb, %s, 'pending')
-            ON CONFLICT (tenant_id, idempotency_key) DO NOTHING RETURNING id
-            """,
-            (command_id, tenant_id, command.nas_identifier, command.session_id,
-             command.username, command.command_type.value,
-             json.dumps(command.attributes, sort_keys=True), command.idempotency_key),
-        )
-        inserted = cursor.fetchone()
-        if inserted is not None:
-            return str(inserted[0])
-        cursor.execute(
-            "SELECT id FROM radius_command_outbox WHERE tenant_id = %s AND idempotency_key = %s",
-            (tenant_id, command.idempotency_key),
-        )
-        existing = cursor.fetchone()
-        return str(existing[0]) if existing else None
-    finally:
-        cursor.close()
-
-
-def lease_pending_commands(connection, *, limit: int = 25, lease_seconds: int = 30):
-    """Lease due commands atomically; concurrent workers skip already-locked rows."""
-    if not 1 <= limit <= 500:
-        raise ValueError("limit must be between 1 and 500")
+def lease_pending_commands(connection, *, limit: int = 10, lease_seconds: int = 30):
+    """Claim due dynamic-authorization requests without blocking peer workers."""
+    if not 1 <= limit <= 100:
+        raise ValueError("limit must be between 1 and 100")
     if not 5 <= lease_seconds <= 300:
         raise ValueError("lease_seconds must be between 5 and 300")
     token = str(uuid4())
@@ -76,44 +31,59 @@ def lease_pending_commands(connection, *, limit: int = 25, lease_seconds: int = 
         cursor.execute(
             """
             WITH candidates AS (
-                SELECT id FROM radius_command_outbox
-                WHERE status = 'pending' AND next_attempt_at <= now()
-                ORDER BY next_attempt_at, created_at, id
-                FOR UPDATE SKIP LOCKED LIMIT %s
+                SELECT tenant_id, id
+                  FROM dynamic_authorization_requests
+                 WHERE status = 'pending'
+                   AND next_attempt_at <= now()
+                   AND attempt_count < max_attempts
+                 ORDER BY next_attempt_at, created_at, id
+                 FOR UPDATE SKIP LOCKED
+                 LIMIT %s
             )
-            UPDATE radius_command_outbox AS q
-            SET status = 'processing', lease_token = %s,
-                lease_expires_at = now() + (%s * interval '1 second'),
-                attempts = attempts + 1, updated_at = now()
-            FROM candidates WHERE q.id = candidates.id
+            UPDATE dynamic_authorization_requests AS q
+               SET status = 'processing',
+                   lease_token = %s,
+                   lease_expires_at = now() + (%s * interval '1 second'),
+                   attempt_count = attempt_count + 1,
+                   updated_at = now()
+              FROM candidates
+             WHERE q.tenant_id = candidates.tenant_id
+               AND q.id = candidates.id
             RETURNING q.id, q.tenant_id, q.nas_identifier, q.session_id,
-                      q.username, q.command_type, q.attributes, q.attempts
+                      q.username, q.request_type, q.attributes, q.attempt_count
             """,
             (limit, token, lease_seconds),
         )
-        return [
-            LeasedRadiusCommand(
-                id=str(row[0]), tenant_id=str(row[1]), nas_identifier=row[2],
-                session_id=row[3], username=row[4], command_type=row[5],
-                attributes=row[6] if isinstance(row[6], dict) else json.loads(row[6]),
-                attempts=row[7], lease_token=token,
+        commands = []
+        for row in cursor.fetchall():
+            request_type = str(row[5])
+            command_type = "change_bandwidth" if request_type == "coa" else request_type
+            attributes = row[6] if isinstance(row[6], dict) else json.loads(row[6])
+            commands.append(
+                LeasedRadiusCommand(
+                    id=str(row[0]), tenant_id=str(row[1]), nas_identifier=row[2],
+                    session_id=row[3], username=row[4], command_type=command_type,
+                    attributes=attributes, attempts=row[7], lease_token=token,
+                )
             )
-            for row in cursor.fetchall()
-        ]
+        return commands
     finally:
         cursor.close()
 
 
 def finish_leased_command(
-    connection, *, command_id: str, lease_token: str, outcome: str,
-    retry_after_seconds: int | None = None, error_code: str | None = None,
+    connection, *, tenant_id: str, command_id: str, lease_token: str,
+    outcome: str, retry_after_seconds: int | None = None,
+    error_code: str | None = None,
 ) -> bool:
-    """Finish only a command still owned by this lease token."""
+    """Finish only the tenant-owned request still held by this lease token."""
     try:
-        normalized_id, normalized_token = str(UUID(command_id)), str(UUID(lease_token))
+        normalized_tenant = str(UUID(tenant_id))
+        normalized_id = str(UUID(command_id))
+        normalized_token = str(UUID(lease_token))
     except (ValueError, TypeError, AttributeError) as exc:
-        raise ValueError("command_id and lease_token must be UUIDs") from exc
-    if outcome not in {"acknowledged", "retry", "failed"}:
+        raise ValueError("tenant_id, command_id and lease_token must be UUIDs") from exc
+    if outcome not in {"acknowledged", "rejected", "retry", "failed"}:
         raise ValueError("unsupported command outcome")
     if outcome == "retry" and (
         retry_after_seconds is None or not 1 <= retry_after_seconds <= 3600
@@ -126,20 +96,24 @@ def finish_leased_command(
     try:
         cursor.execute(
             """
-            UPDATE radius_command_outbox
-            SET status = %s, lease_token = NULL, lease_expires_at = NULL,
-                next_attempt_at = CASE WHEN %s = 'retry'
-                  THEN now() + (%s * interval '1 second') ELSE next_attempt_at END,
-                dispatched_at = CASE WHEN %s IN ('acknowledged','failed')
-                  THEN now() ELSE dispatched_at END,
-                completed_at = CASE WHEN %s IN ('acknowledged','failed')
-                  THEN now() ELSE completed_at END,
-                last_error_code = %s, updated_at = now()
-            WHERE id = %s AND status = 'processing' AND lease_token = %s
+            UPDATE dynamic_authorization_requests
+               SET status = %s,
+                   lease_token = NULL,
+                   lease_expires_at = NULL,
+                   next_attempt_at = CASE WHEN %s = 'retry'
+                     THEN now() + (%s * interval '1 second') ELSE next_attempt_at END,
+                   completed_at = CASE WHEN %s IN ('acknowledged','rejected','failed')
+                     THEN now() ELSE NULL END,
+                   last_error_code = %s,
+                   updated_at = now()
+             WHERE tenant_id = %s AND id = %s
+               AND status = 'processing' AND lease_token = %s
             RETURNING id
             """,
-            (new_status, outcome, retry_after_seconds or 0, outcome, outcome,
-             error_code, normalized_id, normalized_token),
+            (
+                new_status, outcome, retry_after_seconds or 0, outcome,
+                error_code, normalized_tenant, normalized_id, normalized_token,
+            ),
         )
         return cursor.fetchone() is not None
     finally:
@@ -147,16 +121,24 @@ def finish_leased_command(
 
 
 def requeue_expired_command_leases(connection) -> int:
-    """Recover worker crashes; expired lease tokens can no longer complete."""
+    """Recover abandoned claims and terminally fail requests out of retry budget."""
     cursor = connection.cursor()
     try:
         cursor.execute(
             """
-            UPDATE radius_command_outbox
-            SET status = 'pending', lease_token = NULL, lease_expires_at = NULL,
-                next_attempt_at = now(), last_error_code = 'worker_lease_expired',
-                updated_at = now()
-            WHERE status = 'processing' AND lease_expires_at < now()
+            UPDATE dynamic_authorization_requests
+               SET status = CASE WHEN attempt_count >= max_attempts
+                                 THEN 'failed' ELSE 'pending' END,
+                   lease_token = NULL,
+                   lease_expires_at = NULL,
+                   next_attempt_at = now(),
+                   completed_at = CASE WHEN attempt_count >= max_attempts
+                                       THEN now() ELSE NULL END,
+                   last_error_code = CASE WHEN attempt_count >= max_attempts
+                                          THEN 'max_attempts_worker_lease_expired'
+                                          ELSE 'worker_lease_expired' END,
+                   updated_at = now()
+             WHERE status = 'processing' AND lease_expires_at < now()
             RETURNING id
             """
         )
