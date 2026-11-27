@@ -24,3 +24,7 @@ authenticate {
         rest_isp_radius
     }
 }
+
+accounting {
+    rest_isp_radius
+}
