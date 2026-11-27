@@ -32,11 +32,13 @@ ON CONFLICT (tenant_id, nas_identifier, session_id) DO UPDATE SET
     updated_at = now()
 WHERE subscriber_sessions.status = 'active'
   AND subscriber_sessions.username = EXCLUDED.username
-  AND EXCLUDED.last_event_at >= subscriber_sessions.last_event_at
   AND (
-      EXCLUDED.status = 'stopped'
-      OR subscriber_sessions.started_at IS NULL
-      OR EXCLUDED.status = 'active'
+      EXCLUDED.last_event_at >= subscriber_sessions.last_event_at
+      OR (
+          EXCLUDED.status = 'active'
+          AND subscriber_sessions.started_at IS NULL
+          AND EXCLUDED.started_at IS NOT NULL
+      )
   )
 RETURNING id
 """

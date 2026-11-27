@@ -110,8 +110,10 @@ def test_stale_stop_event_cannot_close_a_newer_session_projection():
     )
     statement = " ".join(cursor.statement.split())
     assert "EXCLUDED.last_event_at >= subscriber_sessions.last_event_at" in statement
-    assert "EXCLUDED.status = 'stopped' OR" in statement
-    assert "EXCLUDED.status = 'stopped'\n      OR EXCLUDED.last_event_at" not in cursor.statement
+    assert "EXCLUDED.status = 'active'" in statement
+    assert "subscriber_sessions.started_at IS NULL" in statement
+    assert "EXCLUDED.started_at IS NOT NULL" in statement
+    assert "EXCLUDED.status = 'stopped' OR" not in statement
     assert cursor.closed
 
 
