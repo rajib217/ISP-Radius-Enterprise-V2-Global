@@ -7,6 +7,7 @@ from urllib.parse import parse_qs
 
 import psycopg
 from fastapi import Depends, FastAPI, HTTPException, Request, Response, status
+from starlette.concurrency import run_in_threadpool
 
 from isp_radius.aaa.authentication import authenticate_subscriber
 
@@ -31,13 +32,16 @@ def _database_connection() -> Generator[psycopg.Connection, None, None]:
         ) from exc
 
 
+_database_dependency = Depends(_database_connection)
+
+
 @app.get("/health/live")
 def live() -> dict[str, str]:
     return {"status": "ok"}
 
 
 @app.get("/health/ready")
-def ready(connection: psycopg.Connection = Depends(_database_connection)) -> dict[str, str]:
+def ready(connection: psycopg.Connection = _database_dependency) -> dict[str, str]:
     connection.execute("SELECT 1")
     return {"status": "ready"}
 
