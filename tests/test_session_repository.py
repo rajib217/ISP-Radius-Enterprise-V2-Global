@@ -95,3 +95,33 @@ def test_new_event_persists_then_projects_in_same_connection():
     assert session_cursor.closed
     assert "INSERT INTO accounting_events" in event_cursor.statement
     assert "INSERT INTO subscriber_sessions" in session_cursor.statement
+
+
+
+def test_stale_stop_event_cannot_close_a_newer_session_projection():
+    cursor = Cursor(None)
+    apply_session_projection(
+        Connection(cursor),
+        tenant_id=str(uuid4()),
+        event=event(
+            AccountingStatus.STOP,
+            at=datetime(2026, 11, 27, 9, 59, tzinfo=UTC),
+        ),
+    )
+    statement = " ".join(cursor.statement.split())
+    assert "EXCLUDED.last_event_at >= subscriber_sessions.last_event_at" in statement
+    assert "EXCLUDED.status = 'stopped' OR" in statement
+    assert "EXCLUDED.status = 'stopped'\n      OR EXCLUDED.last_event_at" not in cursor.statement
+    assert cursor.closed
+
+
+def test_newer_stop_event_can_close_session_projection():
+    cursor = Cursor((str(uuid4()),))
+    stop_at = datetime(2026, 11, 27, 10, 5, tzinfo=UTC)
+    assert apply_session_projection(
+        Connection(cursor),
+        tenant_id=str(uuid4()),
+        event=event(AccountingStatus.STOP, at=stop_at),
+    )
+    assert cursor.parameters[5] == "stopped"
+    assert cursor.parameters[8] == stop_at
