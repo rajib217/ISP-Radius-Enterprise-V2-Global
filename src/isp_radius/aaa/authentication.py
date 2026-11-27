@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from ipaddress import ip_address
 from typing import Any, Protocol
 
 from argon2 import PasswordHasher
@@ -67,10 +68,14 @@ def authenticate_subscriber(
     """
     if not nas_ip or not username or not password or len(password) > 1024:
         return None
+    try:
+        normalized_nas_ip = str(ip_address(nas_ip))
+    except ValueError:
+        return None
 
     cursor = connection.cursor()
     try:
-        cursor.execute(_AUTH_QUERY, (nas_ip, username))
+        cursor.execute(_AUTH_QUERY, (normalized_nas_ip, username))
         rows = cursor.fetchall()
     finally:
         cursor.close()
