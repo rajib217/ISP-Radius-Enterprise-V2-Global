@@ -231,6 +231,61 @@ def test_all_migrations_and_accounting_session_lifecycle():
         ).fetchone()
         assert owner[0] == "integration-subscriber"
 
+        # Exercise monitoring queries against PostgreSQL, not only fake cursors.
+        from isp_radius.persistence.session_monitoring_repository import (
+            get_subscriber_session_summary,
+            list_subscriber_sessions,
+        )
+
+        now = datetime.now(UTC)
+        online_id = str(uuid4())
+        stale_id = str(uuid4())
+        connection.execute(
+            """
+            INSERT INTO subscriber_sessions (
+                id, tenant_id, nas_identifier, session_id, username, status,
+                started_at, last_event_at, input_octets, output_octets, session_seconds
+            ) VALUES
+                (%s, %s, 'integration-bng', 'monitor-online', 'monitor-online-user',
+                 'active', %s, %s, 10, 20, 0),
+                (%s, %s, 'integration-bng', 'monitor-stale', 'monitor-stale-user',
+                 'active', %s, %s, 30, 40, 0)
+            """,
+            (
+                online_id, tenant_id, now - timedelta(seconds=60),
+                now - timedelta(seconds=10),
+                stale_id, tenant_id, now - timedelta(hours=1),
+                now - timedelta(minutes=10),
+            ),
+        )
+
+        online_rows = list_subscriber_sessions(
+            connection, tenant_id=tenant_id, state="online",
+            search="monitor-online-user", stale_after_seconds=300,
+        )
+        stale_rows = list_subscriber_sessions(
+            connection, tenant_id=tenant_id, state="stale",
+            nas_identifier="integration-bng", stale_after_seconds=300,
+        )
+        offline_rows = list_subscriber_sessions(
+            connection, tenant_id=tenant_id, state="offline",
+            search="integration-subscriber", stale_after_seconds=300,
+        )
+        assert [item["id"] for item in online_rows] == [online_id]
+        assert online_rows[0]["state"] == "online"
+        assert online_rows[0]["duration_seconds"] >= 60
+        assert [item["id"] for item in stale_rows] == [stale_id]
+        assert stale_rows[0]["state"] == "stale"
+        assert [item["state"] for item in offline_rows] == ["offline"]
+
+        monitoring_summary = get_subscriber_session_summary(
+            connection, tenant_id=tenant_id, stale_after_seconds=300
+        )
+        assert monitoring_summary["total_sessions"] == 3
+        assert monitoring_summary["online"] == 1
+        assert monitoring_summary["stale"] == 1
+        assert monitoring_summary["offline"] == 1
+
         counts = connection.execute(
             "SELECT COUNT(*) FROM accounting_events WHERE tenant_id = %s",
             (tenant_id,),
