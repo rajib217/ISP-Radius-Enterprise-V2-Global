@@ -3,10 +3,10 @@ from __future__ import annotations
 
 import os
 from collections.abc import Generator
+from urllib.parse import parse_qs
 
 import psycopg
-from fastapi import Depends, FastAPI, HTTPException, Query, Response, status
-from fastapi.security import HTTPBasic, HTTPBasicCredentials
+from fastapi import Depends, FastAPI, HTTPException, Request, Response, status
 
 from isp_radius.aaa.authentication import authenticate_subscriber
 
@@ -16,7 +16,6 @@ app = FastAPI(
     redoc_url=None,
     openapi_url=None,
 )
-_basic = HTTPBasic(auto_error=False, realm="ISP-RADIUS")
 
 
 def _database_connection() -> Generator[psycopg.Connection, None, None]:
@@ -43,30 +42,29 @@ def ready(connection: psycopg.Connection = Depends(_database_connection)) -> dic
     return {"status": "ready"}
 
 
-@app.get("/radius/authenticate", status_code=status.HTTP_204_NO_CONTENT)
-def radius_authenticate(
-    nas_ip: str = Query(min_length=1, max_length=253),
-    credentials: HTTPBasicCredentials | None = Depends(_basic),
+@app.post("/radius/authenticate", status_code=status.HTTP_204_NO_CONTENT)
+async def radius_authenticate(
+    request: Request,
     connection: psycopg.Connection = Depends(_database_connection),
 ) -> Response:
-    if credentials is None or not credentials.username or not credentials.password:
-        raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="Invalid subscriber credentials",
-            headers={"WWW-Authenticate": 'Basic realm="ISP-RADIUS"'},
-        )
+    """Validate one PAP credential request sent over the protected REST channel."""
+    raw_body = await request.body()
+    if len(raw_body) > 8192:
+        raise HTTPException(status_code=413, detail="Request too large")
+    try:
+        form = parse_qs(raw_body.decode("utf-8"), keep_blank_values=True, strict_parsing=True)
+        username = form["username"][0]
+        password = form["password"][0]
+        nas_ip = form["nas_ip"][0]
+        if any(len(form[key]) != 1 for key in ("username", "password", "nas_ip")):
+            raise ValueError("duplicate form field")
+    except (UnicodeDecodeError, KeyError, IndexError, ValueError):
+        raise HTTPException(status_code=400, detail="Invalid authentication request") from None
 
     subscriber = authenticate_subscriber(
-        connection,
-        nas_ip=nas_ip,
-        username=credentials.username,
-        password=credentials.password,
+        connection, nas_ip=nas_ip, username=username, password=password
     )
     if subscriber is None:
-        raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="Invalid subscriber credentials",
-            headers={"WWW-Authenticate": 'Basic realm="ISP-RADIUS"'},
-        )
+        raise HTTPException(status_code=401, detail="Invalid subscriber credentials")
 
     return Response(status_code=status.HTTP_204_NO_CONTENT)
