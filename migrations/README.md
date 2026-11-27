@@ -3,7 +3,7 @@
 ## Baseline
 
 - Target: PostgreSQL 16 or newer.
-- Apply `0001_core.sql` through `0006_nas_radius_profile.sql` in filename order.
+- Apply `0001_core.sql` through `0007_dynamic_authorization_outbox.sql` in filename order.
 - These migrations assume an empty database for the baseline.
 - Take and verify a backup before applying migrations to any non-empty environment.
 - Apply each migration once, in filename order, using a database role limited to schema changes.
@@ -25,6 +25,16 @@ Migration 0002 stores normalized accounting events with tenant-scoped idempotenc
 
 The repository adapter leaves commit/rollback to the caller. If projection update fails, the caller must roll back the transaction so the event insert is not committed alone.
 
-## Subscriber authentication\n\nMigration 0004 adds one Argon2id password hash per tenant-scoped subscriber. Migration 0005 indexes enabled NAS source addresses for authentication lookup. Migration 0006 assigns each NAS an explicit RADIUS reply profile (`generic_wispr` or `mikrotik`) so vendor-specific attributes are selected deliberately. The authentication service resolves the tenant from the authenticated NAS packet source IP, requires the NAS, subscriber, and service plan to be enabled, and verifies the password hash in application memory. No plaintext password is stored. The initial FreeRADIUS integration is PAP-only over a protected REST/HTTPS channel. CHAP, MS-CHAP, EAP, reply-policy attributes, and accounting packet forwarding are not implemented yet.\n\n## Important scope
+## Subscriber authentication and authorization
 
-This is a foundational schema, not a complete billing or statutory accounting implementation. It does not yet include invoices, payment allocation, taxes, fiscal-period close, audit actor records, a production RADIUS listener, or a migration runner. Production deployment still requires integration tests against PostgreSQL and a supported DB-API driver. Validate SQL, locking behavior, and concurrent event ingestion against the exact PostgreSQL version in staging before production use.
+Migration 0004 adds one Argon2id password hash per tenant-scoped subscriber. Migration 0005 indexes enabled NAS source addresses for authentication lookup. Migration 0006 assigns each NAS an explicit RADIUS reply profile (`generic_wispr` or `mikrotik`) so vendor-specific attributes are selected deliberately. The authentication service resolves the tenant from the authenticated NAS packet source IP, requires the NAS, subscriber, and service plan to be enabled, and verifies the password hash in application memory. No plaintext password is stored. The initial FreeRADIUS integration is PAP-only over a protected REST/HTTPS channel.
+
+## CoA and Disconnect outbox
+
+Migration 0007 adds an immutable-intent, tenant-scoped outbox for CoA and Disconnect requests. New commands can only be enqueued for a matching active subscriber session and enabled NAS. An idempotency key prevents duplicate operator actions. The outbox stores no RADIUS shared secret. Command intent and terminal audit records cannot be edited or deleted by ordinary application updates.
+
+The current implementation creates outbox records only. The RFC 5176 packet worker, secure NAS secret retrieval, UDP transport, response authenticator/Message-Authenticator verification, claim leasing, retry/backoff, operator API authentication/RBAC, and live NAS tests remain pending. Do not represent an enqueued command as a completed disconnect or applied policy change.
+
+## Important scope
+
+This is a foundational schema, not a complete billing or statutory accounting implementation. It does not yet include invoices, payment allocation, taxes, fiscal-period close, production user/actor identity tables, a production RADIUS listener, or a migration runner. Validate SQL, locking behavior, and concurrent event ingestion against the exact PostgreSQL version in staging before production use.
