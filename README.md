@@ -2,7 +2,7 @@
 
 Vendor-neutral AAA and ISP network operations platform. This is a separate V2 codebase; V1 remains unchanged: https://github.com/rajib217/ISP-Radius-Enterprise
 
-**Status:** early implementation. Includes normalized and idempotent accounting ingestion, PostgreSQL session projection, Argon2id subscriber authentication, a private REST endpoint, interactive Argon2id password provisioning, explicit RADIUS reply profiles, and a FreeRADIUS 3.2 PAP integration template with authorization reply attributes. MikroTik and generic WISPr bandwidth adapters are covered by unit tests and the PostgreSQL integration test. PostgreSQL 16 CI tests exercise migrations and authentication. The API uses a bounded per-worker PostgreSQL connection pool. This is not production-ready: CHAP/MS-CHAP/EAP, RADIUS accounting packet integration, API rate limiting, HA, load testing and live NAS validation remain pending.
+**Status:** early implementation. Includes normalized and idempotent RADIUS accounting ingestion, transactional PostgreSQL session projection, Argon2id subscriber authentication, a private REST API, interactive Argon2id password provisioning, explicit RADIUS reply profiles, and FreeRADIUS 3.2 PAP authentication, authorization and accounting templates. MikroTik and generic WISPr bandwidth adapters are covered by unit tests and PostgreSQL integration. CI exercises PostgreSQL 16 migrations and accounting lifecycle. The API uses a bounded per-worker PostgreSQL connection pool. Production validation remains pending: CHAP/MS-CHAP/EAP, CoA/Disconnect, API rate limiting, HA, load testing, FreeRADIUS config parsing on the target distribution, and live NAS validation are not complete.
 
 ## Product goals
 - RADIUS AAA: authentication, authorization, accounting, session lifecycle, CoA and disconnect.
@@ -17,13 +17,15 @@ Vendor-neutral AAA and ISP network operations platform. This is a separate V2 co
 1. Keep the AAA domain independent of vendor-specific code.
 2. Treat BNG/NAS subscriber authentication separately from OLT access-network management. OLTs are not presumed to authenticate subscriber PPP sessions.
 3. Expose verified adapter capabilities, not broad vendor compatibility promises.
-4. Make accounting ingestion idempotent and update the current-session projection in the same caller-owned transaction.
+4. Make accounting ingestion idempotent and update the current-session projection in the same transaction.
 5. Keep secrets and customer data out of source control.
 6. Make schema changes through versioned migrations.
 7. Preserve V1 as a reference and migration source, never as a write target.
 
 ## Initial repository layout
-- `src/isp_radius/aaa/`: normalized accounting and Argon2id authentication\n- `src/isp_radius/api/`: private REST authentication API\n- `deploy/freeradius/3.2/`: FreeRADIUS PAP integration templates
+- `src/isp_radius/aaa/`: normalized accounting and Argon2id authentication
+- `src/isp_radius/api/`: private REST authentication, authorization and accounting API
+- `deploy/freeradius/3.2/`: FreeRADIUS integration templates
 - `src/isp_radius/domain/`: tenant, subscriber, service-plan and NAS value objects
 - `src/isp_radius/finance/`: currency-safe journal and reversal primitives
 - `src/isp_radius/persistence/`: tenant-scoped accounting event and session repositories
