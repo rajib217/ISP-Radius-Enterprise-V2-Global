@@ -1,19 +1,10 @@
 """Atomic accounting-event ingestion and current-session projection."""
 from __future__ import annotations
 
-from typing import Any, Protocol
 from uuid import UUID, uuid4
 
 from isp_radius.aaa.accounting import AccountingEvent, AccountingStatus
 from isp_radius.persistence.accounting_repository import Connection, persist_accounting_event
-
-
-class _Cursor(Protocol):
-    def execute(self, operation: str, parameters: tuple[Any, ...]) -> Any: ...
-
-    def fetchone(self) -> Any: ...
-
-    def close(self) -> Any: ...
 
 
 _UPSERT_SESSION = """
