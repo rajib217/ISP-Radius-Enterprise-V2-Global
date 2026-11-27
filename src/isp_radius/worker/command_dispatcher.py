@@ -19,7 +19,7 @@ from isp_radius.aaa.coa_transport import (
     RadiusNegativeAcknowledgement,
     RadiusTransportError,
     RadiusTransportTimeout,
-    dispatch_leased_command,
+    load_nas_coa_endpoint,
 )
 from isp_radius.persistence.command_repository import (
     LeasedRadiusCommand,
@@ -178,13 +178,16 @@ class RadiusCommandWorker:
 
     def _dispatch_one(self, command: LeasedRadiusCommand) -> None:
         try:
+            # Resolve endpoint metadata using a short DB checkout, then release
+            # the connection before any potentially slow UDP/network operation.
             with self.pool.connection() as connection:
-                dispatch_leased_command(
+                endpoint = load_nas_coa_endpoint(
                     connection,
-                    command=command,
-                    secret_provider=self.secret_provider,
-                    transport=self.transport,
+                    tenant_id=command.tenant_id,
+                    nas_identifier=command.nas_identifier,
                 )
+            secret = self.secret_provider.get_secret(endpoint.secret_ref)
+            self.transport.send(endpoint=endpoint, command=command, secret=secret)
         except RadiusNegativeAcknowledgement as exc:
             cause = str(exc.error_cause) if exc.error_cause is not None else "nas_nak"
             self._finish(command, outcome="rejected", error_code=f"radius_nak_{cause}")
