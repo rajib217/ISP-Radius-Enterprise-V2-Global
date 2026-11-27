@@ -1,5 +1,6 @@
 import json
 import socket
+import time
 import urllib.error
 import urllib.request
 from types import SimpleNamespace
@@ -60,7 +61,7 @@ def test_worker_health_and_metrics_endpoints():
         secret_provider=object(),
         transport=object(),
     )
-    worker.last_cycle_at = __import__("time").monotonic()
+    worker.last_cycle_at = time.monotonic()
     worker.last_cycle_ok = True
     worker.total_leased = 9
     worker.total_cycle_errors = 2
@@ -75,11 +76,11 @@ def test_worker_health_and_metrics_endpoints():
             assert json.load(response)["status"] == "ready"
         with urllib.request.urlopen(base + "/metrics") as response:
             metrics = response.read().decode()
-        assert "isp_radius_worker_commands_leased_total 9\\n" in metrics
-        assert "isp_radius_worker_queue_pending 4\\n" in metrics
-        assert "isp_radius_worker_queue_oldest_pending_seconds 17\\n" in metrics
-        assert "isp_radius_worker_commands_failed_last_15m 1\\n" in metrics
-        assert "isp_radius_worker_commands_rejected_last_15m 3\\n" in metrics
+        assert "isp_radius_worker_commands_leased_total 9\n" in metrics
+        assert "isp_radius_worker_queue_pending 4\n" in metrics
+        assert "isp_radius_worker_queue_oldest_pending_seconds 17\n" in metrics
+        assert "isp_radius_worker_commands_failed_last_15m 1\n" in metrics
+        assert "isp_radius_worker_commands_rejected_last_15m 3\n" in metrics
         try:
             urllib.request.urlopen(base + "/unknown")
         except urllib.error.HTTPError as exc:
@@ -105,7 +106,7 @@ def test_readiness_fails_before_first_successful_cycle():
             urllib.request.urlopen(f"http://127.0.0.1:{port}/health/ready")
         except urllib.error.HTTPError as exc:
             assert exc.code == 503
-            assert json.load(exc) ["status"] == "not_ready"
+            assert json.load(exc)["status"] == "not_ready"
         else:
             raise AssertionError("worker without a successful cycle must not be ready")
     finally:
