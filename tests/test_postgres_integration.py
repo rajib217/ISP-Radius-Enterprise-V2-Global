@@ -49,16 +49,16 @@ def test_all_migrations_and_accounting_session_lifecycle():
             (tenant_id, "Integration Tenant", f"it-{tenant_id[:8]}"),
         )
         base = datetime(2026, 11, 27, 10, 0, tzinfo=UTC)
-        start = _event("Start", base, 100)
+        interim = _event("Interim-Update", base + timedelta(seconds=20), 250)
+        with connection.transaction():
+            assert record_accounting_event(connection, tenant_id=tenant_id, event=interim)
 
+        # A delayed Start fills the unknown start time without rewinding counters/time.
+        start = _event("Start", base, 100)
         with connection.transaction():
             assert record_accounting_event(connection, tenant_id=tenant_id, event=start)
         with connection.transaction():
             assert not record_accounting_event(connection, tenant_id=tenant_id, event=start)
-
-        interim = _event("Interim-Update", base + timedelta(seconds=20), 250)
-        with connection.transaction():
-            assert record_accounting_event(connection, tenant_id=tenant_id, event=interim)
 
         stale = _event("Interim-Update", base + timedelta(seconds=10), 175)
         with connection.transaction():
