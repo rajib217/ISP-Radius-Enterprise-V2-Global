@@ -31,3 +31,6 @@ pythonpath = ["src"]
 [tool.ruff]
 line-length = 100
 target-version = "py312"
+
+[tool.setuptools.package-data]
+"isp_radius.aaa" = ["radius_dictionary"]
