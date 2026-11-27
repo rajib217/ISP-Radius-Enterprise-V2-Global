@@ -18,7 +18,7 @@ ON CONFLICT (tenant_id, nas_identifier, session_id) DO UPDATE SET
     status = CASE WHEN EXCLUDED.status = 'stopped' THEN 'stopped'
                   ELSE subscriber_sessions.status END,
     started_at = COALESCE(subscriber_sessions.started_at, EXCLUDED.started_at),
-    last_event_at = EXCLUDED.last_event_at,
+    last_event_at = GREATEST(subscriber_sessions.last_event_at, EXCLUDED.last_event_at),
     stopped_at = CASE WHEN EXCLUDED.status = 'stopped'
                       THEN EXCLUDED.stopped_at
                       ELSE subscriber_sessions.stopped_at END,
@@ -28,7 +28,10 @@ ON CONFLICT (tenant_id, nas_identifier, session_id) DO UPDATE SET
     terminate_cause = COALESCE(EXCLUDED.terminate_cause, subscriber_sessions.terminate_cause),
     updated_at = now()
 WHERE subscriber_sessions.status = 'active'
-  AND EXCLUDED.last_event_at >= subscriber_sessions.last_event_at
+  AND (
+      EXCLUDED.last_event_at >= subscriber_sessions.last_event_at
+      OR (subscriber_sessions.started_at IS NULL AND EXCLUDED.started_at IS NOT NULL)
+  )
 RETURNING id
 """
 
