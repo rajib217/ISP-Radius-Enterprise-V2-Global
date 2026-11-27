@@ -7,7 +7,11 @@ from isp_radius.aaa.dynamic_authorization import (
     DynamicAuthorizationRequest,
     DynamicAuthorizationType,
 )
-from isp_radius.adapters.radius_attributes import BandwidthPolicy, RadiusProfile, get_radius_attribute_adapter
+from isp_radius.adapters.radius_attributes import (
+    BandwidthPolicy,
+    RadiusProfile,
+    get_radius_attribute_adapter,
+)
 from isp_radius.persistence.accounting_repository import Connection
 
 

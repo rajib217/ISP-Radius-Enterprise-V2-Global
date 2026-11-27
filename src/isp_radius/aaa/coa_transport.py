@@ -12,9 +12,9 @@ from ipaddress import ip_address
 from pathlib import Path
 from typing import Protocol
 
+from pyrad import packet
 from pyrad.client import Client, Timeout
 from pyrad.dictionary import Dictionary
-from pyrad import packet
 
 from isp_radius.persistence.command_repository import LeasedRadiusCommand
 

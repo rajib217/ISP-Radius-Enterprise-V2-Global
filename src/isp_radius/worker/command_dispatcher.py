@@ -6,9 +6,9 @@ import logging
 import os
 import signal
 import time
-from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+from collections.abc import Callable
 from dataclasses import dataclass
-from typing import Callable
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 import psycopg
 from psycopg_pool import ConnectionPool
@@ -134,8 +134,7 @@ class RadiusCommandWorker:
 
     def _lease_batch(self) -> list[LeasedRadiusCommand]:
         # Commit leases before network I/O so another worker sees the lease.
-        with self.pool.connection() as connection:
-            with connection.transaction():
+        with self.pool.connection() as connection, connection.transaction():
                 return lease_pending_commands(
                     connection,
                     limit=self.config.batch_size,

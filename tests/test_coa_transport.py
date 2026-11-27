@@ -77,7 +77,7 @@ def test_coa_nak_is_not_reported_as_success(monkeypatch):
         def __init__(self, **kwargs): pass
         def CreateCoAPacket(self, **kwargs): return object()
         def SendPacket(self, request):
-            return SimpleNamespace(code=packet.CoANAK, **{"get": lambda key, default: [503]})
+            return SimpleNamespace(code=packet.CoANAK, get=lambda key, default: [503])
 
     monkeypatch.setattr(module, "Client", FakeClient)
     endpoint = NasCoaEndpoint("192.0.2.10", 3799, "radius_udp", "env:RADIUS_NAS_EDGE")
