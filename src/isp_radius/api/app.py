@@ -4,6 +4,7 @@ from __future__ import annotations
 import os
 from collections.abc import AsyncIterator, Generator
 from contextlib import asynccontextmanager
+from ipaddress import ip_address
 from urllib.parse import parse_qs
 
 import psycopg
@@ -11,8 +12,10 @@ from fastapi import Depends, FastAPI, HTTPException, Request, Response, status
 from psycopg_pool import ConnectionPool, PoolTimeout
 from starlette.concurrency import run_in_threadpool
 
+from isp_radius.aaa.accounting import normalize_accounting
 from isp_radius.aaa.authentication import authenticate_subscriber
 from isp_radius.aaa.authorization import authorize_subscriber
+from isp_radius.persistence.session_repository import record_accounting_event
 
 
 def _pool_sizes() -> tuple[int, int]:
@@ -153,3 +156,84 @@ async def radius_authorize(
         attribute: {"op": ":=", "value": value}
         for attribute, value in authorization.attributes.items()
     }
+
+
+_ACCOUNTING_FORM_FIELDS = {
+    "acct_status_type": "Acct-Status-Type",
+    "acct_session_id": "Acct-Session-Id",
+    "username": "User-Name",
+    "event_timestamp": "Event-Timestamp",
+    "acct_delay_time": "Acct-Delay-Time",
+    "acct_input_octets": "Acct-Input-Octets",
+    "acct_input_gigawords": "Acct-Input-Gigawords",
+    "acct_output_octets": "Acct-Output-Octets",
+    "acct_output_gigawords": "Acct-Output-Gigawords",
+    "acct_session_time": "Acct-Session-Time",
+    "acct_terminate_cause": "Acct-Terminate-Cause",
+}
+
+
+@app.post("/radius/accounting", status_code=status.HTTP_204_NO_CONTENT)
+async def radius_accounting(
+    request: Request,
+    connection: psycopg.Connection = _database_dependency,
+) -> Response:
+    """Atomically accept, deduplicate and project a FreeRADIUS accounting event.
+
+    Tenant and NAS identity are resolved from the authenticated packet source IP,
+    never from a caller-supplied NAS-IP-Address or NAS-Identifier field.
+    """
+    raw_body = await request.body()
+    if len(raw_body) > 8192:
+        raise HTTPException(status_code=413, detail="Request too large")
+    try:
+        form = parse_qs(raw_body.decode("utf-8"), keep_blank_values=True, strict_parsing=True)
+        if any(len(values) != 1 for values in form.values()):
+            raise ValueError("duplicate form field")
+        nas_ip = str(ip_address(form["nas_ip"][0]))
+        attributes = {
+            radius_name: form[field_name][0]
+            for field_name, radius_name in _ACCOUNTING_FORM_FIELDS.items()
+            if field_name in form and form[field_name][0] != ""
+        }
+        if not attributes.get("Acct-Session-Id") or not attributes.get("User-Name"):
+            raise ValueError("required accounting fields are missing")
+        if not attributes.get("Acct-Status-Type"):
+            raise ValueError("Acct-Status-Type is required")
+    except (UnicodeDecodeError, KeyError, IndexError, ValueError):
+        raise HTTPException(status_code=400, detail="Invalid accounting request") from None
+
+    try:
+        # The NAS name comes from the trusted inventory record, not the RADIUS payload.
+        with connection.transaction():
+            cursor = connection.cursor()
+            try:
+                cursor.execute(
+                    """
+                    SELECT tenant_id, name
+                      FROM nas_devices
+                     WHERE address = %s AND enabled = TRUE
+                    """,
+                    (nas_ip,),
+                )
+                nas_rows = cursor.fetchall()
+            finally:
+                cursor.close()
+
+            if len(nas_rows) != 1:
+                raise HTTPException(status_code=401, detail="Unknown or ambiguous NAS source")
+
+            tenant_id, nas_name = nas_rows[0]
+            attributes["NAS-Identifier"] = str(nas_name)
+            event = normalize_accounting(attributes)
+            await run_in_threadpool(
+                record_accounting_event,
+                connection,
+                tenant_id=str(tenant_id),
+                event=event,
+            )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail="Invalid accounting attributes") from exc
+
+    # A duplicate is still a successfully acknowledged RADIUS Accounting-Request.
+    return Response(status_code=status.HTTP_204_NO_CONTENT)
