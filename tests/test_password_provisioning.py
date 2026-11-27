@@ -37,6 +37,8 @@ class FakeConnection:
 
 
 def test_password_cli_rejects_mismatch_without_database(monkeypatch, capsys):
+    monkeypatch.setattr(provision_subscriber.sys.stdin, "isatty", lambda: True)
+    monkeypatch.setattr(provision_subscriber.sys.stderr, "isatty", lambda: True)
     prompts = iter(["first-password", "different-password"])
     monkeypatch.setattr(provision_subscriber.getpass, "getpass", lambda _prompt: next(prompts))
     connect = lambda *_args, **_kwargs: (_ for _ in ()).throw(AssertionError("DB must not connect"))
@@ -51,7 +53,11 @@ def test_password_cli_rejects_mismatch_without_database(monkeypatch, capsys):
 
 
 def test_password_cli_updates_only_hash_for_tenant_subscriber(monkeypatch, capsys):
+    monkeypatch.setattr(provision_subscriber.sys.stdin, "isatty", lambda: True)
+    monkeypatch.setattr(provision_subscriber.sys.stderr, "isatty", lambda: True)
     tenant_id, subscriber_id = str(uuid4()), str(uuid4())
+    monkeypatch.setattr(provision_subscriber.sys.stdin, "isatty", lambda: True)
+    monkeypatch.setattr(provision_subscriber.sys.stderr, "isatty", lambda: True)
     prompts = iter(["a-strong-ppp-password", "a-strong-ppp-password"])
     monkeypatch.setattr(provision_subscriber.getpass, "getpass", lambda _prompt: next(prompts))
     monkeypatch.setenv("DATABASE_URL", "postgresql://test")
