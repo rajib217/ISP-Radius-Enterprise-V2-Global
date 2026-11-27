@@ -1,4 +1,5 @@
 """Atomic accounting-event ingestion and current-session projection."""
+# ruff: noqa: I001
 from __future__ import annotations
 
 from uuid import UUID, uuid4
@@ -37,10 +38,10 @@ RETURNING id
 
 
 def apply_session_projection(
-    connection: accounting_repository.Connection,
+    connection: Connection,
     *,
     tenant_id: str,
-    event: aaa_accounting.AccountingEvent,
+    event: AccountingEvent,
 ) -> bool:
     """Apply a newly inserted event to its current-session projection.
 
@@ -52,7 +53,7 @@ def apply_session_projection(
     except (ValueError, TypeError, AttributeError) as exc:
         raise ValueError("tenant_id must be a valid UUID") from exc
 
-    is_stop = event.status is aaa_accounting.AccountingStatus.STOP
+    is_stop = event.status is AccountingStatus.STOP
     is_start = event.status is aaa_accounting.AccountingStatus.START
     cursor = connection.cursor()
     try:
@@ -90,7 +91,7 @@ def record_accounting_event(
     Returns False for an exact duplicate. The caller must commit or roll back
     the transaction; any projection error must roll back the event insert too.
     """
-    inserted = accounting_repository.persist_accounting_event(
+    inserted = persist_accounting_event(
         connection, tenant_id=tenant_id, event=event
     )
     if not inserted:
