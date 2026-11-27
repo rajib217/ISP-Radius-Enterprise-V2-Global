@@ -16,15 +16,16 @@ The API uses the RADIUS packet source IP rather than the client-supplied NAS-IP-
 
 On Debian/Ubuntu, install FreeRADIUS 3.2 and its REST module using the distribution package manager. Confirm that rlm_rest is available.
 
-1. Apply migrations 0001 through 0004 in order.
-2. Install V2 API dependencies: pip install -e .
-3. Set DATABASE_URL in a protected service environment. Use a dedicated PostgreSQL application role with only the required SELECT permissions for authentication tables.
-4. Run the API behind a TLS reverse proxy. Bind the application server to loopback or a private interface only. Do not expose the HTTP backend publicly.
-5. Install mods-available/rest_isp_radius into FreeRADIUS mods-available and enable it with: ln -s ../mods-available/rest_isp_radius /etc/freeradius/3.0/mods-enabled/rest_isp_radius
-6. Copy the authentication fragment from sites-available/isp-radius-auth into the existing sites-enabled/default virtual server authorize and authenticate sections. Do not replace the complete default server with this fragment.
-7. Add each BNG/NAS separately to clients.conf. Generate a unique high-entropy shared secret per device. Never use the example secret.
-8. Store the API CA certificate at the configured path and verify the API certificate hostname.
-9. Configure each subscriber with an Argon2id hash in subscriber_credentials; never insert a cleartext password.
+1. Apply migrations 0001 through 0005 in order.
+2. Install V2 API dependencies: `pip install -e .`.
+3. Set `DATABASE_URL` in a protected service environment. Use a dedicated PostgreSQL application role with only the required SELECT permissions for authentication tables.
+4. Optionally set `DB_POOL_MIN_SIZE` (default 1) and `DB_POOL_MAX_SIZE` (default 10). Values must be integers satisfying `1 <= min <= max <= 100`. Each API worker owns its own pool, so size the aggregate across all workers against PostgreSQL's connection limit.
+5. Run the API behind a TLS reverse proxy. Bind the application server to loopback or a private interface only. Do not expose the HTTP backend publicly.
+6. Install mods-available/rest_isp_radius into FreeRADIUS mods-available and enable it with: `ln -s ../mods-available/rest_isp_radius /etc/freeradius/3.0/mods-enabled/rest_isp_radius`.
+7. Copy the authentication fragment from sites-available/isp-radius-auth into the existing sites-enabled/default virtual server authorize and authenticate sections. Do not replace the complete default server with this fragment.
+8. Add each BNG/NAS separately to clients.conf. Generate a unique high-entropy shared secret per device. Never use the example secret.
+9. Store the API CA certificate at the configured path and verify the API certificate hostname.
+10. Configure each subscriber with an Argon2id hash in subscriber_credentials; never insert a cleartext password.
 
 ## Validate
 
@@ -51,7 +52,7 @@ Do not enable production debug logging. Ensure access logs, reverse-proxy logs, 
 - No authorization reply attributes (rate limits, framed IP, VLAN, IPv6 pools) are returned yet. Authentication success alone is not full subscriber provisioning.
 - No RADIUS Accounting-Request integration is wired to this API yet. Keep the existing accounting path until the accounting REST/SQL integration is implemented and validated.
 - NAS source-IP mapping assumes direct RADIUS packets and globally unambiguous tenant mapping. Proxy support needs trusted proxy identity and explicit tenant/NAS mapping.
-- The API currently opens a PostgreSQL connection per request. Add a tuned connection pool, rate limiting, request metrics, and load tests before high-volume production use.
+- The API uses a bounded per-worker PostgreSQL connection pool. Pool sizing must account for worker count and the PostgreSQL connection budget. Rate limiting, request metrics, and load tests remain required before high-volume production use.
 - FreeRADIUS config has not yet been validated against your exact package build or NAS firmware. Run freeradius -XC and end-to-end radtest/real NAS tests before production.
 
 ## Reference
