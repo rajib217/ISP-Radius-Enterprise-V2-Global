@@ -86,6 +86,22 @@ def test_all_migrations_and_accounting_session_lifecycle():
             """,
             (tenant_id, subscriber_id, hash_subscriber_password("integration-secret")),
         )
+        connection.execute(
+            "UPDATE nas_devices SET radius_profile = 'mikrotik' WHERE tenant_id = %s AND id = %s",
+            (tenant_id, nas_id),
+        )
+        from isp_radius.aaa.authorization import authorize_subscriber
+
+        policy_result = authorize_subscriber(
+            connection,
+            nas_ip="192.0.2.55",
+            username="integration-user",
+        )
+        assert policy_result is not None
+        assert policy_result.attributes == {
+            "Mikrotik-Rate-Limit": "10000000/50000000"
+        }
+
         auth_result = authenticate_subscriber(
             connection,
             nas_ip="192.0.2.55",
