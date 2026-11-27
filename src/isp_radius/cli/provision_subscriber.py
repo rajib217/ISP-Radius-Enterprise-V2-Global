@@ -59,7 +59,7 @@ def main(argv: list[str] | None = None) -> int:
             psycopg.connect(database_url, connect_timeout=5) as connection,
             connection.cursor() as cursor,
         ):
-                cursor.execute(
+            cursor.execute(
                 """
                 SELECT 1
                   FROM subscribers
