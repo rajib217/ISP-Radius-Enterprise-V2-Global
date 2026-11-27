@@ -44,9 +44,11 @@ def test_radius_accounting_persists_normalized_event_and_acknowledges_duplicate(
 
     def fake_record(conn, *, tenant_id, event):
         recorded.append((conn, tenant_id, event))
-        return False  # Exact retransmission is still acknowledged to FreeRADIUS.
+        return False
 
-    monkeypatch.setattr("isp_radius.api.app.record_accounting_event", fake_record)
+    monkeypatch.setattr(
+        "isp_radius.api.app.record_accounting_event_with_usage", fake_record
+    )
 
     def override_connection():
         yield connection
@@ -56,16 +58,11 @@ def test_radius_accounting_persists_normalized_event_and_acknowledges_duplicate(
         response = TestClient(app).post(
             "/radius/accounting",
             data={
-                "nas_ip": "192.0.2.55",
-                "acct_status_type": "3",
-                "acct_session_id": "session-abc",
-                "username": "subscriber-01",
-                "acct_input_octets": "1",
-                "acct_input_gigawords": "1",
-                "acct_output_octets": "2048",
-                "acct_session_time": "3600",
-                "acct_delay_time": "4",
-                "nas_identifier": "untrusted-client-value",
+                "nas_ip": "192.0.2.55", "acct_status_type": "3",
+                "acct_session_id": "session-abc", "username": "subscriber-01",
+                "acct_input_octets": "1", "acct_input_gigawords": "1",
+                "acct_output_octets": "2048", "acct_session_time": "3600",
+                "acct_delay_time": "4", "nas_identifier": "untrusted-client-value",
             },
         )
     finally:
@@ -117,10 +114,8 @@ def test_radius_accounting_rejects_unknown_nas_source():
         response = TestClient(app).post(
             "/radius/accounting",
             data={
-                "nas_ip": "192.0.2.55",
-                "acct_status_type": "1",
-                "acct_session_id": "s1",
-                "username": "u1",
+                "nas_ip": "192.0.2.55", "acct_status_type": "1",
+                "acct_session_id": "s1", "username": "u1",
             },
         )
     finally:

@@ -27,7 +27,7 @@ The repository adapter leaves commit/rollback to the caller. If projection updat
 
 ## Usage metering
 
-Migration 0012 stores calculated usage deltas linked to the previous and current accounting events. Composite foreign keys enforce that both source events belong to the same tenant. One current event can produce at most one persisted delta. Missing counters remain NULL; usage is never silently changed to zero. This table is metering evidence only: it does not price usage, create invoices, or post financial entries. Persist accounting events and their usage delta in one transaction when the ingestion workflow is wired.
+Migration 0012 stores calculated usage deltas linked to previous and current accounting events. Composite foreign keys enforce that both source events belong to the same tenant. One current event can produce at most one persisted delta. A transaction-scoped advisory lock serializes updates for one session. Late events remain in the raw event journal but are not used to create overlapping usage intervals. Counter regressions are logged for reconciliation. Missing counters remain NULL. Usage deltas are metering evidence only; they do not price usage, create invoices, or post financial entries.
 
 ## Subscriber authentication and authorization
 

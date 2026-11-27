@@ -15,7 +15,7 @@ from starlette.concurrency import run_in_threadpool
 from isp_radius.aaa.accounting import normalize_accounting
 from isp_radius.aaa.authentication import authenticate_subscriber
 from isp_radius.aaa.authorization import authorize_subscriber
-from isp_radius.persistence.session_repository import record_accounting_event
+from isp_radius.persistence.session_repository import record_accounting_event_with_usage
 
 
 def _pool_sizes() -> tuple[int, int]:
@@ -37,12 +37,8 @@ async def lifespan(application: FastAPI) -> AsyncIterator[None]:
     if database_url:
         minimum, maximum = _pool_sizes()
         pool = ConnectionPool(
-            conninfo=database_url,
-            min_size=minimum,
-            max_size=maximum,
-            timeout=2,
-            open=False,
-            name="isp-radius-api",
+            conninfo=database_url, min_size=minimum, max_size=maximum,
+            timeout=2, open=False, name="isp-radius-api",
         )
         pool.open(wait=True, timeout=5)
         application.state.db_pool = pool
@@ -110,15 +106,10 @@ async def radius_authenticate(
         raise HTTPException(status_code=400, detail="Invalid authentication request") from None
 
     subscriber = await run_in_threadpool(
-        authenticate_subscriber,
-        connection,
-        nas_ip=nas_ip,
-        username=username,
-        password=password,
+        authenticate_subscriber, connection, nas_ip=nas_ip, username=username, password=password,
     )
     if subscriber is None:
         raise HTTPException(status_code=401, detail="Invalid subscriber credentials")
-
     return Response(status_code=status.HTTP_204_NO_CONTENT)
 
 
@@ -142,16 +133,12 @@ async def radius_authorize(
 
     try:
         authorization = await run_in_threadpool(
-            authorize_subscriber,
-            connection,
-            nas_ip=nas_ip,
-            username=username,
+            authorize_subscriber, connection, nas_ip=nas_ip, username=username,
         )
     except NotImplementedError as exc:
         raise HTTPException(status_code=503, detail="NAS RADIUS profile is unsupported") from exc
     if authorization is None:
         raise HTTPException(status_code=401, detail="Subscriber authorization rejected")
-
     return {
         attribute: {"op": ":=", "value": value}
         for attribute, value in authorization.attributes.items()
@@ -178,11 +165,7 @@ async def radius_accounting(
     request: Request,
     connection: psycopg.Connection = _database_dependency,
 ) -> Response:
-    """Atomically accept, deduplicate and project a FreeRADIUS accounting event.
-
-    Tenant and NAS identity are resolved from the authenticated packet source IP,
-    never from a caller-supplied NAS-IP-Address or NAS-Identifier field.
-    """
+    """Atomically accept, deduplicate, project and meter a FreeRADIUS accounting event."""
     raw_body = await request.body()
     if len(raw_body) > 8192:
         raise HTTPException(status_code=413, detail="Request too large")
@@ -204,7 +187,6 @@ async def radius_accounting(
         raise HTTPException(status_code=400, detail="Invalid accounting request") from None
 
     try:
-        # The NAS name comes from the trusted inventory record, not the RADIUS payload.
         with connection.transaction():
             cursor = connection.cursor()
             try:
@@ -227,7 +209,7 @@ async def radius_accounting(
             attributes["NAS-Identifier"] = str(nas_name)
             event = normalize_accounting(attributes)
             await run_in_threadpool(
-                record_accounting_event,
+                record_accounting_event_with_usage,
                 connection,
                 tenant_id=str(tenant_id),
                 event=event,
@@ -235,5 +217,4 @@ async def radius_accounting(
     except ValueError as exc:
         raise HTTPException(status_code=400, detail="Invalid accounting attributes") from exc
 
-    # A duplicate is still a successfully acknowledged RADIUS Accounting-Request.
     return Response(status_code=status.HTTP_204_NO_CONTENT)

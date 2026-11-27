@@ -33,14 +33,10 @@ RETURNING id
 """
 
 
-def persist_accounting_event(
+def insert_accounting_event(
     connection: Connection, *, tenant_id: str, event: AccountingEvent
-) -> bool:
-    """Insert one event; return False for an exact duplicate.
-
-    The transaction is intentionally not committed here. The application service
-    should persist the event and update its session projection atomically.
-    """
+) -> str | None:
+    """Insert an event and return its database ID, or None for a duplicate."""
     try:
         normalized_tenant_id = str(UUID(tenant_id))
     except (ValueError, TypeError, AttributeError) as exc:
@@ -51,20 +47,24 @@ def persist_accounting_event(
         cursor.execute(
             _INSERT_EVENT,
             (
-                str(uuid4()),
-                normalized_tenant_id,
-                event.idempotency_key,
-                event.nas_id,
-                event.session_id,
-                event.username,
-                event.status.value,
-                event.event_time,
-                event.input_octets,
-                event.output_octets,
-                event.session_seconds,
-                event.terminate_cause,
+                str(uuid4()), normalized_tenant_id, event.idempotency_key,
+                event.nas_id, event.session_id, event.username, event.status.value,
+                event.event_time, event.input_octets, event.output_octets,
+                event.session_seconds, event.terminate_cause,
             ),
         )
-        return cursor.fetchone() is not None
+        row = cursor.fetchone()
+        return str(row[0]) if row is not None else None
     finally:
         cursor.close()
+
+
+def persist_accounting_event(
+    connection: Connection, *, tenant_id: str, event: AccountingEvent
+) -> bool:
+    """Insert one event; return False for an exact duplicate.
+
+    The transaction is intentionally not committed here. The application service
+    should persist the event and update its session projection atomically.
+    """
+    return insert_accounting_event(connection, tenant_id=tenant_id, event=event) is not None

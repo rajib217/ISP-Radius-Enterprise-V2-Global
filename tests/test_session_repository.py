@@ -5,6 +5,7 @@ from isp_radius.aaa.accounting import AccountingEvent, AccountingStatus
 from isp_radius.persistence.session_repository import (
     apply_session_projection,
     record_accounting_event,
+    record_accounting_event_with_usage,
 )
 
 
@@ -29,21 +30,30 @@ class Cursor:
 class Connection:
     def __init__(self, *cursors):
         self.cursors = list(cursors)
+        self.executed = []
 
     def cursor(self):
-        return self.cursors.pop(0)
+        cursor = self.cursors.pop(0)
+        self.executed.append(cursor)
+        return cursor
 
 
-def event(status=AccountingStatus.START, at=None):
+def event(
+    status=AccountingStatus.START,
+    at=None,
+    input_octets=100,
+    output_octets=200,
+    session_seconds=30,
+):
     return AccountingEvent(
         nas_id="bng-01",
         session_id="session-42",
         username="subscriber-42",
         status=status,
         event_time=at or datetime(2026, 11, 27, 10, 0, tzinfo=UTC),
-        input_octets=100,
-        output_octets=200,
-        session_seconds=30,
+        input_octets=input_octets,
+        output_octets=output_octets,
+        session_seconds=session_seconds,
         terminate_cause="User-Request" if status is AccountingStatus.STOP else None,
     )
 
@@ -97,7 +107,6 @@ def test_new_event_persists_then_projects_in_same_connection():
     assert "INSERT INTO subscriber_sessions" in session_cursor.statement
 
 
-
 def test_stale_stop_event_cannot_close_a_newer_session_projection():
     cursor = Cursor(None)
     apply_session_projection(
@@ -127,3 +136,100 @@ def test_newer_stop_event_can_close_session_projection():
     )
     assert cursor.parameters[5] == "stopped"
     assert cursor.parameters[8] == stop_at
+
+
+def test_accounting_ingestion_persists_delta_in_same_transaction():
+    tenant_id = str(uuid4())
+    previous_id = str(uuid4())
+    inserted_id = str(uuid4())
+    previous_time = datetime(2026, 11, 27, 9, 55, tzinfo=UTC)
+    current_time = datetime(2026, 11, 27, 10, 0, tzinfo=UTC)
+    connection = Connection(
+        Cursor((None,)),
+        Cursor((inserted_id,)),
+        Cursor((str(uuid4()),)),
+        Cursor(None),
+        Cursor((previous_id, previous_time, 1000, 2000, 300)),
+        Cursor((str(uuid4()),)),
+    )
+
+    assert record_accounting_event_with_usage(
+        connection,
+        tenant_id=tenant_id,
+        event=event(
+            AccountingStatus.INTERIM_UPDATE,
+            at=current_time,
+            input_octets=1500,
+            output_octets=2600,
+            session_seconds=330,
+        ),
+    ) is True
+
+    assert len(connection.executed) == 6
+    assert "pg_advisory_xact_lock" in connection.executed[0].statement
+    assert "INSERT INTO accounting_events" in connection.executed[1].statement
+    assert "INSERT INTO subscriber_sessions" in connection.executed[2].statement
+    assert "event_time > %s" in connection.executed[3].statement
+    assert "event_time < %s" in connection.executed[4].statement
+    usage_cursor = connection.executed[5]
+    assert "INSERT INTO subscriber_usage_deltas" in usage_cursor.statement
+    assert usage_cursor.parameters[5:7] == (previous_id, inserted_id)
+    assert usage_cursor.parameters[9:] == (500, 600, 30)
+    assert all(cursor.closed for cursor in connection.executed)
+
+
+def test_duplicate_accounting_event_stops_before_projection_or_usage():
+    connection = Connection(Cursor((None,)), Cursor(None))
+    assert record_accounting_event_with_usage(
+        connection, tenant_id=str(uuid4()), event=event()
+    ) is False
+    assert len(connection.executed) == 2
+    assert all(cursor.closed for cursor in connection.executed)
+
+
+def test_late_event_is_kept_but_does_not_create_overlapping_usage():
+    connection = Connection(
+        Cursor((None,)),
+        Cursor((str(uuid4()),)),
+        Cursor((str(uuid4()),)),
+        Cursor((1,)),
+    )
+    assert record_accounting_event_with_usage(
+        connection,
+        tenant_id=str(uuid4()),
+        event=event(
+            AccountingStatus.INTERIM_UPDATE,
+            at=datetime(2026, 11, 27, 9, 58, tzinfo=UTC),
+        ),
+    ) is True
+    assert len(connection.executed) == 4
+    assert all(cursor.closed for cursor in connection.executed)
+
+
+def test_counter_regression_does_not_rollback_accounting_event(caplog):
+    connection = Connection(
+        Cursor((None,)),
+        Cursor((str(uuid4()),)),
+        Cursor((str(uuid4()),)),
+        Cursor(None),
+        Cursor((
+            str(uuid4()),
+            datetime(2026, 11, 27, 9, 55, tzinfo=UTC),
+            5000,
+            6000,
+            300,
+        )),
+    )
+    assert record_accounting_event_with_usage(
+        connection,
+        tenant_id=str(uuid4()),
+        event=event(
+            AccountingStatus.INTERIM_UPDATE,
+            at=datetime(2026, 11, 27, 10, 0, tzinfo=UTC),
+            input_octets=100,
+            output_octets=200,
+        ),
+    ) is True
+    assert "counter regressed" in caplog.text
+    assert len(connection.executed) == 5
+    assert all(cursor.closed for cursor in connection.executed)
