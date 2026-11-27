@@ -84,6 +84,8 @@ def test_password_cli_updates_only_hash_for_tenant_subscriber(monkeypatch, capsy
 
 
 def test_password_cli_does_not_write_when_subscriber_missing(monkeypatch, capsys):
+    monkeypatch.setattr(provision_subscriber.sys.stdin, "isatty", lambda: True)
+    monkeypatch.setattr(provision_subscriber.sys.stderr, "isatty", lambda: True)
     prompts = iter(["a-strong-ppp-password", "a-strong-ppp-password"])
     monkeypatch.setattr(provision_subscriber.getpass, "getpass", lambda _prompt: next(prompts))
     monkeypatch.setenv("DATABASE_URL", "postgresql://test")
