@@ -1,0 +1,41 @@
+[Unit]
+Description=ISP RADIUS Dynamic Authorization Worker
+Documentation=https://github.com/rajib217/ISP-Radius-Enterprise-V2-Global
+Wants=network-online.target
+After=network-online.target postgresql.service
+StartLimitIntervalSec=300
+StartLimitBurst=5
+
+[Service]
+Type=simple
+User=isp-radius
+Group=isp-radius
+WorkingDirectory=/opt/isp-radius/current
+EnvironmentFile=/etc/isp-radius/worker.env
+Environment=PYTHONUNBUFFERED=1
+ExecStart=/opt/isp-radius/venv/bin/isp-radius-command-worker
+Restart=on-failure
+RestartSec=5
+TimeoutStartSec=30
+TimeoutStopSec=45
+KillSignal=SIGTERM
+UMask=0077
+NoNewPrivileges=true
+PrivateTmp=true
+PrivateDevices=true
+ProtectSystem=strict
+ProtectHome=true
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+RestrictSUIDSGID=true
+LockPersonality=true
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
+CapabilityBoundingSet=
+AmbientCapabilities=
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=isp-radius-worker
+
+[Install]
+WantedBy=multi-user.target
