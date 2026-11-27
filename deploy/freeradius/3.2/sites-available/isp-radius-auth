@@ -4,8 +4,14 @@
 
 authorize {
     if (&User-Password) {
-        update control {
-            Auth-Type := rest_isp_radius
+        rest_isp_radius
+        if (ok || updated) {
+            update control {
+                Auth-Type := rest_isp_radius
+            }
+        }
+        else {
+            reject
         }
     }
     else {
