@@ -1,5 +1,4 @@
 """Atomic accounting-event ingestion and current-session projection."""
-# ruff: noqa: I001
 from __future__ import annotations
 
 import logging
