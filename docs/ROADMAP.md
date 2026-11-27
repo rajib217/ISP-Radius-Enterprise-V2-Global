@@ -14,7 +14,8 @@
 - FreeRADIUS SQL integration and authorization policy.
 - Authentication test harness for PAP/CHAP/MS-CHAPv2 as supported by selected configuration.
 - Accounting Start/Interim/Stop idempotency, session reconciliation and stale-session policy.
-- CoA/Disconnect with correlation, response handling and audit.
+- CoA/Disconnect command domain and tenant-scoped durable outbox.
+- Pending: RFC 5176 packet encoding/response verification, worker leasing/retry/backoff, operator RBAC/API, and live NAS interoperability tests.
 
 ## Phase 3: Vendor adapters
 - MikroTik RouterOS BNG/NAS adapter and compatibility test matrix.
