@@ -1,0 +1,8 @@
+# Scrape with a local Prometheus agent on the same host.
+# The worker deliberately binds its unauthenticated metrics endpoint to loopback.
+scrape_configs:
+  - job_name: isp-radius-command-worker
+    scrape_interval: 15s
+    scrape_timeout: 5s
+    static_configs:
+      - targets: ["127.0.0.1:9811"]
