@@ -34,9 +34,9 @@ SELECT id, nas_identifier, session_id, username, status,
         FROM subscriber_sessions
        WHERE tenant_id = %s
   ) AS monitored
- WHERE (%s IS NULL OR monitor_state = %s)
-   AND (%s IS NULL OR username ILIKE %s OR session_id ILIKE %s)
-   AND (%s IS NULL OR nas_identifier = %s)
+ WHERE (%s::text IS NULL OR monitor_state = %s)
+   AND (%s::text IS NULL OR username ILIKE %s OR session_id ILIKE %s)
+   AND (%s::text IS NULL OR nas_identifier = %s)
  ORDER BY CASE monitor_state WHEN 'online' THEN 0 WHEN 'stale' THEN 1 ELSE 2 END,
           last_event_at DESC, id
  LIMIT %s OFFSET %s
