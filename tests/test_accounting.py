@@ -59,11 +59,22 @@ def test_nas_ip_is_fallback_identity():
     assert normalize_accounting(attrs).nas_id == "192.0.2.10"
 
 
-@pytest.mark.parametrize("bad_value", ["-1", "not-a-number"])
+@pytest.mark.parametrize("bad_value", ["-1", "not-a-number", "4294967296"])
 def test_rejects_invalid_octet_counter(bad_value):
     attrs = sample_attributes()
     attrs["Acct-Input-Octets"] = bad_value
     with pytest.raises(ValueError):
+        normalize_accounting(attrs)
+
+
+@pytest.mark.parametrize(
+    ("field", "bad_value"),
+    [("Acct-Input-Octets", "4294967296"), ("Acct-Input-Gigawords", "4294967296")],
+)
+def test_rejects_octet_counter_components_over_uint32(field, bad_value):
+    attrs = sample_attributes()
+    attrs[field] = bad_value
+    with pytest.raises(ValueError, match="unsigned 32-bit"):
         normalize_accounting(attrs)
 
 

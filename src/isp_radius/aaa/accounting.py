@@ -38,9 +38,17 @@ def _non_negative_int(value: Any, field: str) -> int | None:
     return parsed
 
 
+def _radius_uint32(value: Any, field: str) -> int | None:
+    parsed = _non_negative_int(value, field)
+    if parsed is not None and parsed > 0xFFFFFFFF:
+        raise ValueError(f"{field} must fit an unsigned 32-bit integer")
+    return parsed
+
+
 def _octet_counter(attributes: dict[str, Any], low_name: str, high_name: str) -> int | None:
-    low = _non_negative_int(attributes.get(low_name), low_name)
-    high = _non_negative_int(attributes.get(high_name), high_name)
+    # RFC 2866 octet counters and Gigawords are each unsigned 32-bit values.
+    low = _radius_uint32(attributes.get(low_name), low_name)
+    high = _radius_uint32(attributes.get(high_name), high_name)
     if low is None and high is None:
         return None
     return ((high or 0) << 32) + (low or 0)

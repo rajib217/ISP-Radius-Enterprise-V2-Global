@@ -60,7 +60,7 @@ def test_radius_accounting_persists_normalized_event_and_acknowledges_duplicate(
                 "acct_status_type": "3",
                 "acct_session_id": "session-abc",
                 "username": "subscriber-01",
-                "acct_input_octets": "4294967297",
+                "acct_input_octets": "1",
                 "acct_input_gigawords": "1",
                 "acct_output_octets": "2048",
                 "acct_session_time": "3600",
@@ -78,7 +78,7 @@ def test_radius_accounting_persists_normalized_event_and_acknowledges_duplicate(
     assert resolved_tenant == str(tenant_id)
     assert event.nas_id == "trusted-bng-01"
     assert event.session_id == "session-abc"
-    assert event.input_octets == (1 << 32) + 4_294_967_297
+    assert event.input_octets == (1 << 32) + 1
     assert event.output_octets == 2048
     assert event.session_seconds == 3600
 
