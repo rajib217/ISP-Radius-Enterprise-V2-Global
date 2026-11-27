@@ -1,4 +1,4 @@
-# FreeRADIUS 3.2.x REST authentication instance.
+# FreeRADIUS 3.2.x REST authentication and authorization instance.
 # Enable by linking this file into mods-enabled/rest_isp_radius.
 rest rest_isp_radius {
     connect_uri = "https://127.0.0.1:8443"
@@ -9,6 +9,14 @@ rest rest_isp_radius {
         check_cert = yes
         check_cert_cn = yes
         ca_file = /etc/freeradius/certs/isp-radius-api-ca.pem
+    }
+
+    authorize {
+        uri = "${..connect_uri}/radius/authorize"
+        method = "post"
+        body = "post"
+        data = "username=%{urlquote:%{User-Name}}&nas_ip=%{urlquote:%{%{Packet-Src-IP-Address}:-%{Packet-Src-IPv6-Address}}}"
+        tls = ${..tls}
     }
 
     authenticate {
