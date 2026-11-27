@@ -33,7 +33,10 @@ def main(argv: list[str] | None = None) -> int:
     args = parser.parse_args(argv)
 
     if not sys.stdin.isatty() or not sys.stderr.isatty():
-        print("Run this command from an interactive terminal so password input stays hidden.", file=sys.stderr)
+        print(
+            "Run this command from an interactive terminal so password input stays hidden.",
+            file=sys.stderr,
+        )
         return 2
 
     password = getpass.getpass("New subscriber password (input hidden): ")
@@ -52,8 +55,10 @@ def main(argv: list[str] | None = None) -> int:
 
     password_hash = hash_subscriber_password(password)
     try:
-        with psycopg.connect(database_url, connect_timeout=5) as connection:
-            with connection.cursor() as cursor:
+        with (
+            psycopg.connect(database_url, connect_timeout=5) as connection,
+            connection.cursor() as cursor,
+        ):
                 cursor.execute(
                     """
                     SELECT 1
