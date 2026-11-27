@@ -33,7 +33,7 @@ Migration 0004 adds one Argon2id password hash per tenant-scoped subscriber. Mig
 
 Migration 0007 adds an immutable-intent, tenant-scoped outbox for CoA and Disconnect requests. New commands can only be enqueued for a matching active subscriber session and enabled NAS. An idempotency key prevents duplicate operator actions. The outbox stores no RADIUS shared secret. Command intent and terminal audit records cannot be edited or deleted by ordinary application updates.
 
-Migration 0011 adds fenced leases, retry budgets, and crash recovery to the same audited outbox populated by the application service. The background worker sends RFC 5176 requests over authenticated RADIUS/UDP and records ACK, NAK, timeout, or terminal failure. Operator API authentication/RBAC, RadSec, and live NAS tests remain pending. Do not represent an enqueued command as a completed disconnect or applied policy change.
+Migration 0011 removes the unused experimental duplicate queue and adds fenced leases, retry budgets, and crash recovery to the audited `dynamic_authorization_requests` outbox populated by the application service. The background worker sends RFC 5176 requests over authenticated RADIUS/UDP and records ACK, NAK, timeout, or terminal failure. Operator API authentication/RBAC, RadSec, and live NAS tests remain pending. Do not represent an enqueued command as a completed disconnect or applied policy change.
 
 ## Important scope
 

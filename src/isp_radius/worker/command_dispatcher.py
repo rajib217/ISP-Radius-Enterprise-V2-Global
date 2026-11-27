@@ -36,7 +36,7 @@ class WorkerConfig:
     pool_max_size: int = 4
     batch_size: int = 10
     poll_interval: float = 1.0
-    lease_seconds: int = 30
+    lease_seconds: int = 120
     transport_timeout: float = 2.0
     transport_retries: int = 2
     max_attempts: int = 8

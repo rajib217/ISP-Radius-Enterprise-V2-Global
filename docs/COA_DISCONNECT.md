@@ -34,15 +34,15 @@ The dictionary covers only attributes currently emitted by this application:
 User-Name, Acct-Session-Id, WISPr bandwidth values, and MikroTik rate-limit.
 NAS firmware, vendor-specific CoA acceptance, and exact attribute direction
 must be validated against each model/firmware in a lab before production.
-This code does not yet include a long-running worker service, RadSec, or live
-hardware interoperability tests.
+The worker is implemented, but RadSec and live hardware interoperability tests
+remain outstanding.
 
 
 ## Background worker
 
 Install the package and run `isp-radius-command-worker` under systemd, a
 container supervisor, or another process manager. Apply migrations through
-`0010_radius_command_retry_policy.sql` first. The worker leases rows in a
+`0011_dynamic_authorization_worker_leases.sql` first. The worker leases rows in a
 short committed transaction, performs UDP I/O outside that transaction, and
 then finalizes the row using its lease token.
 

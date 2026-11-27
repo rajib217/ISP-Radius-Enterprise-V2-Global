@@ -57,6 +57,7 @@ def test_disconnect_uses_verified_ack(monkeypatch):
 
         def CreateCoAPacket(self, **kwargs):
             assert kwargs["code"] == packet.DisconnectRequest
+            assert kwargs["message_authenticator"] is True
             return object()
 
         def SendPacket(self, request):

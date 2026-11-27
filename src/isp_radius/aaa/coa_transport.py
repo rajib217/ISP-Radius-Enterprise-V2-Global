@@ -111,11 +111,11 @@ class PyradCoaTransport:
             attributes["NAS_IPv6_Address"] = str(nas_ip)
         if command.command_type == "disconnect":
             request = client.CreateCoAPacket(
-                code=packet.DisconnectRequest, **attributes
+                code=packet.DisconnectRequest, message_authenticator=True, **attributes
             )
             accepted, rejected = packet.DisconnectACK, packet.DisconnectNAK
         elif command.command_type == "change_bandwidth":
-            request = client.CreateCoAPacket(**attributes)
+            request = client.CreateCoAPacket(message_authenticator=True, **attributes)
             accepted, rejected = packet.CoAACK, packet.CoANAK
         else:
             raise ValueError("Unsupported RADIUS command type")
