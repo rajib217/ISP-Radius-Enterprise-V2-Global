@@ -2,31 +2,71 @@
 from __future__ import annotations
 
 import os
-from collections.abc import Generator
+from collections.abc import AsyncIterator, Generator
+from contextlib import asynccontextmanager
 from urllib.parse import parse_qs
 
 import psycopg
 from fastapi import Depends, FastAPI, HTTPException, Request, Response, status
+from psycopg_pool import ConnectionPool, PoolTimeout
 from starlette.concurrency import run_in_threadpool
 
 from isp_radius.aaa.authentication import authenticate_subscriber
+
+
+def _pool_sizes() -> tuple[int, int]:
+    """Read bounded pool sizes so environment mistakes cannot exhaust PostgreSQL."""
+    try:
+        minimum = int(os.environ.get("DB_POOL_MIN_SIZE", "1"))
+        maximum = int(os.environ.get("DB_POOL_MAX_SIZE", "10"))
+    except ValueError as exc:
+        raise RuntimeError("DB_POOL_MIN_SIZE and DB_POOL_MAX_SIZE must be integers") from exc
+    if not 1 <= minimum <= maximum <= 100:
+        raise RuntimeError("database pool sizes must satisfy 1 <= min <= max <= 100")
+    return minimum, maximum
+
+
+@asynccontextmanager
+async def lifespan(application: FastAPI) -> AsyncIterator[None]:
+    database_url = os.environ.get("DATABASE_URL")
+    application.state.db_pool = None
+    if database_url:
+        minimum, maximum = _pool_sizes()
+        pool = ConnectionPool(
+            conninfo=database_url,
+            min_size=minimum,
+            max_size=maximum,
+            timeout=2,
+            open=False,
+            name="isp-radius-api",
+        )
+        pool.open(wait=True, timeout=5)
+        application.state.db_pool = pool
+    try:
+        yield
+    finally:
+        if application.state.db_pool is not None:
+            application.state.db_pool.close()
+            application.state.db_pool = None
+
 
 app = FastAPI(
     title="ISP RADIUS Authentication API",
     docs_url=None,
     redoc_url=None,
     openapi_url=None,
+    lifespan=lifespan,
 )
 
 
-def _database_connection() -> Generator[psycopg.Connection, None, None]:
-    database_url = os.environ.get("DATABASE_URL")
-    if not database_url:
+def _database_connection(request: Request) -> Generator[psycopg.Connection, None, None]:
+    pool: ConnectionPool | None = getattr(request.app.state, "db_pool", None)
+    if pool is None:
         raise HTTPException(status_code=503, detail="Authentication backend unavailable")
     try:
-        with psycopg.connect(database_url, connect_timeout=2) as connection:
+        with pool.connection(timeout=2) as connection:
             yield connection
-    except psycopg.Error as exc:
+    except (psycopg.Error, PoolTimeout) as exc:
         raise HTTPException(
             status_code=503, detail="Authentication backend unavailable"
         ) from exc
