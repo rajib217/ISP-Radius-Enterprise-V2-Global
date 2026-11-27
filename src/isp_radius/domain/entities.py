@@ -135,7 +135,7 @@ class NasDevice:
         try:
             ip_address(self.address)
         except ValueError:
-            hostname = self.address[:-1] if self.address.endswith(".") else self.address
+            hostname = self.address.removesuffix(".")
             labels = hostname.split(".")
             label_pattern = re.compile(r"[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?")
             if (
