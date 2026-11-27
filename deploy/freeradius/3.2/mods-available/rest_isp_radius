@@ -15,7 +15,7 @@ rest rest_isp_radius {
         uri = "${..connect_uri}/radius/authenticate"
         method = "post"
         body = "post"
-        data = "username=%{urlquote:%{User-Name}}&password=%{urlquote:%{User-Password}}&nas_ip=%{urlquote:%{NAS-IP-Address}}"
+        data = "username=%{urlquote:%{User-Name}}&password=%{urlquote:%{User-Password}}&nas_ip=%{urlquote:%{%{Packet-Src-IP-Address}:-%{Packet-Src-IPv6-Address}}}"
         tls = ${..tls}
     }
 }
