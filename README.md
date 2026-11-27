@@ -2,7 +2,7 @@
 
 Vendor-neutral AAA and ISP network operations platform. This is a separate V2 codebase; V1 remains unchanged: https://github.com/rajib217/ISP-Radius-Enterprise
 
-**Status:** early implementation. Includes normalized and idempotent accounting ingestion, PostgreSQL session projection, Argon2id subscriber authentication, a private REST endpoint, and a FreeRADIUS 3.2 PAP integration template. PostgreSQL 16 CI tests exercise migrations and authentication. This is not production-ready: CHAP/MS-CHAP/EAP, reply attributes, RADIUS accounting packet integration, pooling, rate limiting, HA and live NAS validation remain pending.
+**Status:** early implementation. Includes normalized and idempotent accounting ingestion, PostgreSQL session projection, Argon2id subscriber authentication, a private REST endpoint, and a FreeRADIUS 3.2 PAP integration template. PostgreSQL 16 CI tests exercise migrations and authentication. The API uses a bounded per-worker PostgreSQL connection pool. This is not production-ready: CHAP/MS-CHAP/EAP, reply attributes, RADIUS accounting packet integration, rate limiting, HA, load testing and live NAS validation remain pending.
 
 ## Product goals
 - RADIUS AAA: authentication, authorization, accounting, session lifecycle, CoA and disconnect.
