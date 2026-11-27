@@ -61,8 +61,12 @@ async def radius_authenticate(
     except (UnicodeDecodeError, KeyError, IndexError, ValueError):
         raise HTTPException(status_code=400, detail="Invalid authentication request") from None
 
-    subscriber = authenticate_subscriber(
-        connection, nas_ip=nas_ip, username=username, password=password
+    subscriber = await run_in_threadpool(
+        authenticate_subscriber,
+        connection,
+        nas_ip=nas_ip,
+        username=username,
+        password=password,
     )
     if subscriber is None:
         raise HTTPException(status_code=401, detail="Invalid subscriber credentials")
