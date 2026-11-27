@@ -8,7 +8,7 @@ from __future__ import annotations
 import hashlib
 import json
 from dataclasses import dataclass
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from enum import StrEnum
 from typing import Any
 
@@ -51,12 +51,12 @@ def _event_time(value: Any) -> datetime:
         parsed = value
     elif isinstance(value, (int, float)) or (isinstance(value, str) and value.strip().isdigit()):
         try:
-            parsed = datetime.fromtimestamp(float(value), tz=timezone.utc)
+            parsed = datetime.fromtimestamp(float(value), tz=UTC)
         except (OverflowError, OSError, ValueError) as exc:
             raise ValueError("Event-Timestamp must be a valid Unix timestamp") from exc
     elif isinstance(value, str):
         try:
-            parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
+            parsed = datetime.fromisoformat(value)
         except ValueError as exc:
             raise ValueError("event_time must be ISO-8601 or Event-Timestamp Unix seconds") from exc
     else:
@@ -139,5 +139,9 @@ def normalize_accounting(attributes: dict[str, Any]) -> AccountingEvent:
         input_octets=_octet_counter(attributes, "Acct-Input-Octets", "Acct-Input-Gigawords"),
         output_octets=_octet_counter(attributes, "Acct-Output-Octets", "Acct-Output-Gigawords"),
         session_seconds=_non_negative_int(attributes.get("Acct-Session-Time"), "Acct-Session-Time"),
-        terminate_cause=(str(attributes["Acct-Terminate-Cause"]) if attributes.get("Acct-Terminate-Cause") else None),
+        terminate_cause=(
+            str(attributes["Acct-Terminate-Cause"])
+            if attributes.get("Acct-Terminate-Cause")
+            else None
+        ),
     )
