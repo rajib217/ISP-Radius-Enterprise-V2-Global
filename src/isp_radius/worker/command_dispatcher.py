@@ -55,7 +55,9 @@ class WorkerConfig:
             raise ValueError("poll_interval must be between 0.1 and 60 seconds")
         if not 5 <= self.lease_seconds <= 300:
             raise ValueError("lease_seconds must be between 5 and 300 seconds")
-        batch_transport_budget = (\n            self.batch_size * self.transport_timeout * (self.transport_retries + 1) + 2\n        )
+        batch_transport_budget = (
+            self.batch_size * self.transport_timeout * (self.transport_retries + 1) + 2
+        )
         if self.lease_seconds <= batch_transport_budget:
             raise ValueError("lease_seconds must cover the full sequential batch transport budget")
         if not 1 <= self.max_attempts <= 50:
@@ -156,7 +158,9 @@ class RadiusCommandWorker:
             return 0
         with self.pool.connection() as connection:
             with connection.transaction():
-                count = requeue_expired_command_leases(\n                    connection, max_attempts=self.config.max_attempts\n                )
+                count = requeue_expired_command_leases(
+                    connection, max_attempts=self.config.max_attempts
+                )
         self._last_recovery = now
         if count:
             logger.warning("recovered_expired_leases count=%d", count)

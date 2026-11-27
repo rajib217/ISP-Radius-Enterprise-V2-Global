@@ -23,7 +23,7 @@ The worker consumes the same `dynamic_authorization_requests` outbox populated b
 finish the lease as `acknowledged`. On `RadiusTransportTimeout`, schedule a
 bounded retry with `finish_leased_command(..., outcome="retry", ...)`. A
 `RadiusNegativeAcknowledgement` is a definitive NAS rejection and should be
-recorded as failed with its RFC 5176 Error-Cause code. Do not mark a command
+recorded as `rejected` with its RFC 5176 Error-Cause code. Do not mark a command
 successful merely because a UDP datagram was sent.
 
 The transport has bounded timeout/retries. The lease must cover the configured batch size multiplied by the maximum per-command transport duration, plus scheduling margin. The worker validates this at startup. Keep the batch and database pool sized for the NAS fleet.
