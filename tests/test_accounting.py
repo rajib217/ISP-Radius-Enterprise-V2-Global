@@ -116,3 +116,47 @@ def test_missing_event_timestamp_uses_receive_time_and_stable_identity():
     assert first.event_time == datetime(2026, 11, 27, 9, 59, 55, tzinfo=UTC)
     assert second.event_time != first.event_time
     assert second.idempotency_key == first.idempotency_key
+
+
+
+@pytest.mark.parametrize(
+    ("field", "value", "message"),
+    [
+        ("nas_id", "n" * 254, "253"),
+        ("session_id", "s" * 257, "256"),
+        ("username", "u" * 129, "128"),
+        ("session_seconds", 0x1_0000_0000, "unsigned 32-bit"),
+        ("input_octets", 0x8000000000000000, "PostgreSQL BIGINT"),
+    ],
+)
+def test_event_model_rejects_values_outside_storage_or_protocol_limits(field, value, message):
+    values = {
+        "nas_id": "nas-a",
+        "session_id": "s1",
+        "username": "u1",
+        "status": AccountingStatus.STOP,
+        "event_time": datetime.now(UTC),
+    }
+    values[field] = value
+    with pytest.raises(ValueError, match=message):
+        AccountingEvent(**values)
+
+
+def test_event_model_rejects_non_integer_session_counters():
+    with pytest.raises(ValueError, match="unsigned 32-bit"):
+        AccountingEvent(
+            nas_id="nas-a",
+            session_id="s1",
+            username="u1",
+            status=AccountingStatus.STOP,
+            event_time=datetime.now(UTC),
+            session_seconds=1.5,
+        )
+
+
+def test_octet_counter_rejects_values_beyond_postgres_bigint():
+    attrs = sample_attributes()
+    attrs["Acct-Input-Octets"] = "4294967295"
+    attrs["Acct-Input-Gigawords"] = "2147483648"
+    with pytest.raises(ValueError, match="BIGINT"):
+        normalize_accounting(attrs)

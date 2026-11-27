@@ -51,7 +51,10 @@ def _octet_counter(attributes: dict[str, Any], low_name: str, high_name: str) ->
     high = _radius_uint32(attributes.get(high_name), high_name)
     if low is None and high is None:
         return None
-    return ((high or 0) << 32) + (low or 0)
+    total = ((high or 0) << 32) + (low or 0)
+    if total > 0x7FFFFFFFFFFFFFFF:
+        raise ValueError(f"{low_name} and {high_name} exceed PostgreSQL BIGINT capacity")
+    return total
 
 
 def _event_time(value: Any) -> datetime:
@@ -87,18 +90,33 @@ class AccountingEvent:
     terminate_cause: str | None = None
 
     def __post_init__(self) -> None:
-        if not self.nas_id.strip():
-            raise ValueError("nas_id is required")
-        if not self.session_id.strip():
-            raise ValueError("session_id is required")
-        if not self.username.strip():
-            raise ValueError("username is required")
+        text_limits = {"nas_id": 253, "session_id": 256, "username": 128}
+        for name, maximum in text_limits.items():
+            value = getattr(self, name)
+            if not isinstance(value, str) or not value.strip():
+                raise ValueError(f"{name} is required")
+            if len(value) > maximum:
+                raise ValueError(f"{name} exceeds {maximum} characters")
+        if not isinstance(self.status, AccountingStatus):
+            raise ValueError("status must be an AccountingStatus")
+        if not isinstance(self.event_time, datetime):
+            raise ValueError("event_time must be a datetime")
         if self.event_time.tzinfo is None or self.event_time.utcoffset() is None:
             raise ValueError("event_time must include a timezone")
-        for name in ("input_octets", "output_octets", "session_seconds"):
+        for name in ("input_octets", "output_octets"):
             value = getattr(self, name)
-            if value is not None and value < 0:
-                raise ValueError(f"{name} must be non-negative")
+            if value is not None and (
+                type(value) is not int or not 0 <= value <= 0x7FFFFFFFFFFFFFFF
+            ):
+                raise ValueError(f"{name} must fit a non-negative PostgreSQL BIGINT")
+        if self.session_seconds is not None and (
+            type(self.session_seconds) is not int or not 0 <= self.session_seconds <= 0xFFFFFFFF
+        ):
+            raise ValueError("session_seconds must fit an unsigned 32-bit integer")
+        if self.terminate_cause is not None and (
+            not isinstance(self.terminate_cause, str) or len(self.terminate_cause) > 64
+        ):
+            raise ValueError("terminate_cause must be at most 64 characters")
 
     @property
     def idempotency_key(self) -> str:
