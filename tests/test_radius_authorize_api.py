@@ -1,5 +1,3 @@
-from uuid import uuid4
-
 from fastapi.testclient import TestClient
 
 from isp_radius.api.app import _database_connection, app
