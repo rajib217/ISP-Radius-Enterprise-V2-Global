@@ -4,8 +4,11 @@ from __future__ import annotations
 
 from uuid import UUID, uuid4
 
-from isp_radius.aaa import accounting as aaa_accounting
-from isp_radius.persistence import accounting_repository
+from isp_radius.aaa.accounting import AccountingEvent, AccountingStatus
+from isp_radius.persistence.accounting_repository import (
+    Connection,
+    persist_accounting_event,
+)
 
 
 _UPSERT_SESSION = """
@@ -54,7 +57,7 @@ def apply_session_projection(
         raise ValueError("tenant_id must be a valid UUID") from exc
 
     is_stop = event.status is AccountingStatus.STOP
-    is_start = event.status is aaa_accounting.AccountingStatus.START
+    is_start = event.status is AccountingStatus.START
     cursor = connection.cursor()
     try:
         cursor.execute(
@@ -81,10 +84,10 @@ def apply_session_projection(
 
 
 def record_accounting_event(
-    connection: accounting_repository.Connection,
+    connection: Connection,
     *,
     tenant_id: str,
-    event: aaa_accounting.AccountingEvent,
+    event: AccountingEvent,
 ) -> bool:
     """Persist the event and update its projection in the caller's transaction.
 
