@@ -43,7 +43,8 @@ def test_lease_uses_dynamic_authorization_outbox_and_skip_locked():
     assert "dynamic_authorization_requests" in sql
     assert "FOR UPDATE SKIP LOCKED" in sql
     assert "attempt_count = attempt_count + 1" in sql
-    assert params[0] == 10
+    assert params[0] == 8
+    assert params[1] == 10
 
 
 def test_lease_maps_coa_to_transport_command_type():
@@ -95,4 +96,5 @@ def test_expired_lease_recovery_is_attempt_bounded():
     cursor = FakeCursor(rows=[(uuid4(),), (uuid4(),)])
     assert requeue_expired_command_leases(FakeConnection(cursor)) == 2
     sql, _ = cursor.executed[0]
-    assert "attempt_count >= max_attempts" in sql
+    assert "attempt_count >= LEAST(max_attempts, %s)" in sql
+    assert cursor.executed[0][1] == (8,)

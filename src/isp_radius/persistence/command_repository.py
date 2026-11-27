@@ -19,12 +19,14 @@ class LeasedRadiusCommand:
     lease_token: str
 
 
-def lease_pending_commands(connection, *, limit: int = 10, lease_seconds: int = 30):
+def lease_pending_commands(connection, *, limit: int = 10, lease_seconds: int = 30, max_attempts: int = 8):
     """Claim due dynamic-authorization requests without blocking peer workers."""
     if not 1 <= limit <= 100:
         raise ValueError("limit must be between 1 and 100")
     if not 5 <= lease_seconds <= 300:
         raise ValueError("lease_seconds must be between 5 and 300")
+    if not 1 <= max_attempts <= 50:
+        raise ValueError("max_attempts must be between 1 and 50")
     token = str(uuid4())
     cursor = connection.cursor()
     try:
@@ -35,7 +37,7 @@ def lease_pending_commands(connection, *, limit: int = 10, lease_seconds: int = 
                   FROM dynamic_authorization_requests
                  WHERE status = 'pending'
                    AND next_attempt_at <= now()
-                   AND attempt_count < max_attempts
+                   AND attempt_count < LEAST(max_attempts, %s)
                  ORDER BY next_attempt_at, created_at, id
                  FOR UPDATE SKIP LOCKED
                  LIMIT %s
@@ -52,7 +54,7 @@ def lease_pending_commands(connection, *, limit: int = 10, lease_seconds: int = 
             RETURNING q.id, q.tenant_id, q.nas_identifier, q.session_id,
                       q.username, q.request_type, q.attributes, q.attempt_count
             """,
-            (limit, token, lease_seconds),
+            (max_attempts, limit, token, lease_seconds),
         )
         commands = []
         for row in cursor.fetchall():
@@ -92,6 +94,8 @@ def finish_leased_command(
     if error_code is not None and (len(error_code) > 64 or not error_code.isascii()):
         raise ValueError("error_code must be at most 64 ASCII characters")
     new_status = "pending" if outcome == "retry" else outcome
+    if not 1 <= max_attempts <= 50:
+        raise ValueError("max_attempts must be between 1 and 50")
     cursor = connection.cursor()
     try:
         cursor.execute(
@@ -120,14 +124,14 @@ def finish_leased_command(
         cursor.close()
 
 
-def requeue_expired_command_leases(connection) -> int:
+def requeue_expired_command_leases(connection, *, max_attempts: int = 8) -> int:
     """Recover abandoned claims and terminally fail requests out of retry budget."""
     cursor = connection.cursor()
     try:
         cursor.execute(
             """
             UPDATE dynamic_authorization_requests
-               SET status = CASE WHEN attempt_count >= max_attempts
+               SET status = CASE WHEN attempt_count >= LEAST(max_attempts, %s)
                                  THEN 'failed' ELSE 'pending' END,
                    lease_token = NULL,
                    lease_expires_at = NULL,
@@ -140,7 +144,8 @@ def requeue_expired_command_leases(connection) -> int:
                    updated_at = now()
              WHERE status = 'processing' AND lease_expires_at < now()
             RETURNING id
-            """
+            """,
+            (max_attempts,),
         )
         return len(cursor.fetchall())
     finally:

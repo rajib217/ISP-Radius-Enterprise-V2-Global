@@ -128,6 +128,7 @@ class RadiusCommandWorker:
                     connection,
                     limit=self.config.batch_size,
                     lease_seconds=self.config.lease_seconds,
+                    max_attempts=self.config.max_attempts,
                 )
 
     def _finish(
@@ -155,7 +156,7 @@ class RadiusCommandWorker:
             return 0
         with self.pool.connection() as connection:
             with connection.transaction():
-                count = requeue_expired_command_leases(connection)
+                count = requeue_expired_command_leases(connection, max_attempts=self.config.max_attempts)
         self._last_recovery = now
         if count:
             logger.warning("recovered_expired_leases count=%d", count)
