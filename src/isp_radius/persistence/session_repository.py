@@ -3,8 +3,8 @@ from __future__ import annotations
 
 from uuid import UUID, uuid4
 
-import isp_radius.aaa.accounting as aaa_accounting
-import isp_radius.persistence.accounting_repository as accounting_repository
+from isp_radius.aaa import accounting as aaa_accounting
+from isp_radius.persistence import accounting_repository
 
 
 _UPSERT_SESSION = """
@@ -37,7 +37,10 @@ RETURNING id
 
 
 def apply_session_projection(
-    connection: accounting_repository.Connection, *, tenant_id: str, event: aaa_accounting.AccountingEvent
+    connection: accounting_repository.Connection,
+    *,
+    tenant_id: str,
+    event: aaa_accounting.AccountingEvent,
 ) -> bool:
     """Apply a newly inserted event to its current-session projection.
 
@@ -77,14 +80,19 @@ def apply_session_projection(
 
 
 def record_accounting_event(
-    connection: Connection, *, tenant_id: str, event: AccountingEvent
+    connection: accounting_repository.Connection,
+    *,
+    tenant_id: str,
+    event: aaa_accounting.AccountingEvent
 ) -> bool:
     """Persist the event and update its projection in the caller's transaction.
 
     Returns False for an exact duplicate. The caller must commit or roll back
     the transaction; any projection error must roll back the event insert too.
     """
-    inserted = accounting_repository.persist_accounting_event(connection, tenant_id=tenant_id, event=event)
+    inserted = accounting_repository.persist_accounting_event(
+        connection, tenant_id=tenant_id, event=event
+    )
     if not inserted:
         return False
     apply_session_projection(connection, tenant_id=tenant_id, event=event)
