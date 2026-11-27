@@ -4,7 +4,10 @@ from __future__ import annotations
 from uuid import UUID, uuid4
 
 from isp_radius.aaa.accounting import AccountingEvent, AccountingStatus
-from isp_radius.persistence.accounting_repository import Connection, persist_accounting_event
+from isp_radius.persistence.accounting_repository import (
+    Connection,
+    persist_accounting_event,
+)
 
 
 _UPSERT_SESSION = """
