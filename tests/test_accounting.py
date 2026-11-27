@@ -91,3 +91,17 @@ def test_iso_timestamp_with_z_suffix_is_accepted():
     attrs["Event-Timestamp"] = "2026-11-27T10:00:00Z"
     event = normalize_accounting(attrs)
     assert event.event_time == datetime(2026, 11, 27, 10, 0, tzinfo=UTC)
+
+
+def test_missing_event_timestamp_uses_receive_time_and_stable_identity():
+    received = datetime(2026, 11, 27, 10, 0, tzinfo=UTC)
+    attrs = sample_attributes()
+    attrs.pop("Event-Timestamp")
+    attrs["Acct-Delay-Time"] = "5"
+
+    first = normalize_accounting(attrs, received_at=received)
+    second = normalize_accounting(attrs, received_at=datetime(2026, 11, 27, 10, 1, tzinfo=UTC))
+
+    assert first.event_time == datetime(2026, 11, 27, 9, 59, 55, tzinfo=UTC)
+    assert second.event_time != first.event_time
+    assert second.idempotency_key == first.idempotency_key
