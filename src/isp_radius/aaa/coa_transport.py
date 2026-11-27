@@ -102,6 +102,8 @@ class PyradCoaTransport:
             retries=self.retries,
         )
         attributes = {key.replace("-", "_"): value for key, value in command.attributes.items()}
+        attributes.setdefault("User_Name", command.username)
+        attributes.setdefault("Acct_Session_Id", command.session_id)
         nas_ip = ip_address(endpoint.address)
         if nas_ip.version == 4:
             attributes["NAS_IP_Address"] = str(nas_ip)

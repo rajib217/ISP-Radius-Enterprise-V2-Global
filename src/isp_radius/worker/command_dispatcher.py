@@ -55,8 +55,9 @@ class WorkerConfig:
             raise ValueError("poll_interval must be between 0.1 and 60 seconds")
         if not 5 <= self.lease_seconds <= 300:
             raise ValueError("lease_seconds must be between 5 and 300 seconds")
-        if self.lease_seconds <= self.transport_timeout * (self.transport_retries + 1) + 2:
-            raise ValueError("lease_seconds must exceed the maximum transport duration")
+        batch_transport_budget = self.batch_size * self.transport_timeout * (self.transport_retries + 1) + 2
+        if self.lease_seconds <= batch_transport_budget:
+            raise ValueError("lease_seconds must cover the full sequential batch transport budget")
         if not 1 <= self.max_attempts <= 50:
             raise ValueError("max_attempts must be between 1 and 50")
         if not 1 <= self.retry_base_seconds <= self.retry_max_seconds <= 3600:
@@ -84,7 +85,7 @@ def config_from_environment() -> WorkerConfig:
         pool_max_size=integer("WORKER_DB_POOL_MAX_SIZE", 4),
         batch_size=integer("RADIUS_WORKER_BATCH_SIZE", 10),
         poll_interval=number("RADIUS_WORKER_POLL_INTERVAL", 1.0),
-        lease_seconds=integer("RADIUS_WORKER_LEASE_SECONDS", 30),
+        lease_seconds=integer("RADIUS_WORKER_LEASE_SECONDS", 120),
         transport_timeout=number("RADIUS_COA_TIMEOUT_SECONDS", 2.0),
         transport_retries=integer("RADIUS_COA_TRANSPORT_RETRIES", 2),
         max_attempts=integer("RADIUS_COMMAND_MAX_ATTEMPTS", 8),
@@ -141,6 +142,7 @@ class RadiusCommandWorker:
             with connection.transaction():
                 return finish_leased_command(
                     connection,
+                    tenant_id=command.tenant_id,
                     command_id=command.id,
                     lease_token=command.lease_token,
                     outcome=outcome,
@@ -170,7 +172,7 @@ class RadiusCommandWorker:
                 )
         except RadiusNegativeAcknowledgement as exc:
             cause = str(exc.error_cause) if exc.error_cause is not None else "nas_nak"
-            self._finish(command, outcome="failed", error_code=f"radius_nak_{cause}")
+            self._finish(command, outcome="rejected", error_code=f"radius_nak_{cause}")
             logger.warning(
                 "radius_command_rejected command_id=%s error_cause=%s",
                 command.id, cause,
