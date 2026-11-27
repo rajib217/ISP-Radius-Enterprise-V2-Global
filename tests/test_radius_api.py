@@ -3,7 +3,7 @@ from uuid import uuid4
 from argon2 import PasswordHasher
 from fastapi.testclient import TestClient
 
-from isp_radius.api.app import app, _database_connection
+from isp_radius.api.app import _database_connection, app
 
 
 class Cursor:
