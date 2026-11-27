@@ -134,7 +134,7 @@ def test_all_migrations_and_accounting_session_lifecycle():
 
         assert row[0] == "stopped"
         assert row[1] == base
-        assert row[2] == base + timedelta(seconds=30)
+        assert row[2] == base + timedelta(seconds=20)
         assert row[3] == base + timedelta(seconds=15)
         assert row[4] == 300
         assert row[5] == 600
