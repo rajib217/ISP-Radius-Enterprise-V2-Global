@@ -41,7 +41,7 @@ def test_plan_rejects_float_money_and_nonpositive_bandwidth():
     with pytest.raises(ValueError, match="Decimal"):
         ServicePlan(uid(), uid(), "P1", "Plan 1", 100.0, "BDT", 30, 1, 1)
     with pytest.raises(ValueError, match="bandwidth"):
-        ServicePlan(uid(), uid(), "P1", "Plan 1", Decimal("100"), "BDT", 30, 0, 1)
+        ServicePlan(uid(), uid(), "P1", "Plan 1", Decimal(100), "BDT", 30, 0, 1)
 
 
 def test_nas_accepts_ip_or_hostname_and_rejects_invalid_address():
@@ -53,4 +53,4 @@ def test_nas_accepts_ip_or_hostname_and_rejects_invalid_address():
 
 def test_plan_rejects_negative_price():
     with pytest.raises(ValueError, match="non-negative"):
-        ServicePlan(uid(), uid(), "P1", "Plan 1", Decimal("-1"), "BDT", 30, 1, 1)
+        ServicePlan(uid(), uid(), "P1", "Plan 1", Decimal(-1), "BDT", 30, 1, 1)
