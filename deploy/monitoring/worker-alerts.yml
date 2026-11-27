@@ -1,0 +1,65 @@
+groups:
+  - name: isp-radius-command-worker
+    rules:
+      - alert: RadiusWorkerTargetDown
+        expr: up{job="isp-radius-command-worker"} == 0
+        for: 1m
+        labels:
+          severity: critical
+        annotations:
+          summary: RADIUS command worker metrics endpoint is down
+          description: Check systemd service status and worker health listener.
+
+      - alert: RadiusWorkerNotReady
+        expr: isp_radius_worker_ready == 0
+        for: 2m
+        labels:
+          severity: critical
+        annotations:
+          summary: RADIUS command worker is not ready
+          description: Worker cycle failed or its last successful cycle is stale.
+
+      - alert: RadiusWorkerCycleErrors
+        expr: increase(isp_radius_worker_cycle_errors_total[10m]) > 3
+        for: 2m
+        labels:
+          severity: warning
+        annotations:
+          summary: RADIUS worker has repeated cycle errors
+          description: Check journald logs, PostgreSQL connectivity and migrations.
+
+      - alert: RadiusCommandQueueBacklog
+        expr: isp_radius_worker_queue_pending > 100
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: RADIUS command queue backlog is growing
+          description: More than 100 dynamic authorization requests remain pending.
+
+      - alert: RadiusCommandQueueAge
+        expr: isp_radius_worker_queue_oldest_pending_seconds > 300
+        for: 3m
+        labels:
+          severity: warning
+        annotations:
+          summary: Oldest RADIUS command is delayed
+          description: The oldest pending request is over five minutes old.
+
+      - alert: RadiusCommandsFailing
+        expr: isp_radius_worker_commands_failed_last_15m > 5
+        for: 1m
+        labels:
+          severity: critical
+        annotations:
+          summary: RADIUS dynamic authorization commands are failing
+          description: Inspect NAS endpoint configuration, secret references and logs.
+
+      - alert: RadiusCommandsRejected
+        expr: isp_radius_worker_commands_rejected_last_15m > 10
+        for: 2m
+        labels:
+          severity: warning
+        annotations:
+          summary: NAS is rejecting dynamic authorization requests
+          description: Check RFC 5176 Error-Cause codes and NAS firmware support.
