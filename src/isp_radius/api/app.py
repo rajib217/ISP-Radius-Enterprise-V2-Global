@@ -12,6 +12,7 @@ from psycopg_pool import ConnectionPool, PoolTimeout
 from starlette.concurrency import run_in_threadpool
 
 from isp_radius.aaa.authentication import authenticate_subscriber
+from isp_radius.aaa.authorization import authorize_subscriber
 
 
 def _pool_sizes() -> tuple[int, int]:
@@ -116,3 +117,39 @@ async def radius_authenticate(
         raise HTTPException(status_code=401, detail="Invalid subscriber credentials")
 
     return Response(status_code=status.HTTP_204_NO_CONTENT)
+
+
+@app.post("/radius/authorize")
+async def radius_authorize(
+    request: Request,
+    connection: psycopg.Connection = _database_dependency,
+) -> dict[str, dict[str, str]]:
+    """Return validated Access-Accept reply attributes for an active subscriber."""
+    raw_body = await request.body()
+    if len(raw_body) > 4096:
+        raise HTTPException(status_code=413, detail="Request too large")
+    try:
+        form = parse_qs(raw_body.decode("utf-8"), keep_blank_values=True, strict_parsing=True)
+        username = form["username"][0]
+        nas_ip = form["nas_ip"][0]
+        if any(len(form[key]) != 1 for key in ("username", "nas_ip")):
+            raise ValueError("duplicate form field")
+    except (UnicodeDecodeError, KeyError, IndexError, ValueError):
+        raise HTTPException(status_code=400, detail="Invalid authorization request") from None
+
+    try:
+        authorization = await run_in_threadpool(
+            authorize_subscriber,
+            connection,
+            nas_ip=nas_ip,
+            username=username,
+        )
+    except NotImplementedError as exc:
+        raise HTTPException(status_code=503, detail="NAS RADIUS profile is unsupported") from exc
+    if authorization is None:
+        raise HTTPException(status_code=401, detail="Subscriber authorization rejected")
+
+    return {
+        attribute: {"op": ":=", "value": value}
+        for attribute, value in authorization.attributes.items()
+    }
