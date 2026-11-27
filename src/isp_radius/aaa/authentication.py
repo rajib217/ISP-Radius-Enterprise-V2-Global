@@ -3,20 +3,11 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from ipaddress import ip_address
-from typing import Any, Protocol
 
 from argon2 import PasswordHasher
 from argon2.exceptions import InvalidHashError, VerificationError, VerifyMismatchError
 
 from isp_radius.persistence.accounting_repository import Connection
-
-
-class _Cursor(Protocol):
-    def execute(self, operation: str, parameters: tuple[Any, ...]) -> Any: ...
-
-    def fetchall(self) -> list[tuple[Any, ...]]: ...
-
-    def close(self) -> Any: ...
 
 
 _AUTH_QUERY = """
