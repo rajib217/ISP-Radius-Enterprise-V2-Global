@@ -46,8 +46,8 @@ def test_unbalanced_journal_is_rejected():
         JournalEntry(
             uid(), uid(), "REF-1", "Unbalanced", now, now,
             (
-                JournalLine("1000", EntrySide.DEBIT, Decimal("10"), "BDT"),
-                JournalLine("4000", EntrySide.CREDIT, Decimal("9"), "BDT"),
+                JournalLine("1000", EntrySide.DEBIT, Decimal(10), "BDT"),
+                JournalLine("4000", EntrySide.CREDIT, Decimal(9), "BDT"),
             ),
         )
 
@@ -58,8 +58,8 @@ def test_mixed_currency_journal_is_rejected():
         JournalEntry(
             uid(), uid(), "REF-2", "Mixed", now, now,
             (
-                JournalLine("1000", EntrySide.DEBIT, Decimal("10"), "BDT"),
-                JournalLine("4000", EntrySide.CREDIT, Decimal("10"), "USD"),
+                JournalLine("1000", EntrySide.DEBIT, Decimal(10), "BDT"),
+                JournalLine("4000", EntrySide.CREDIT, Decimal(10), "USD"),
             ),
         )
 
