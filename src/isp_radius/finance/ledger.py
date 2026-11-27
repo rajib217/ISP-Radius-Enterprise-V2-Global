@@ -79,11 +79,11 @@ class JournalEntry:
             raise ValueError("a journal entry cannot mix currencies")
         debits = sum(
             (line.amount for line in self.lines if line.side is EntrySide.DEBIT),
-            Decimal("0"),
+            Decimal(0),
         )
         credits = sum(
             (line.amount for line in self.lines if line.side is EntrySide.CREDIT),
-            Decimal("0"),
+            Decimal(0),
         )
         if debits != credits:
             raise ValueError("journal entry is not balanced: debits must equal credits")
@@ -96,19 +96,20 @@ class JournalEntry:
     def total_debits(self) -> Decimal:
         return sum(
             (line.amount for line in self.lines if line.side is EntrySide.DEBIT),
-            Decimal("0"),
+            Decimal(0),
         )
 
     @property
     def total_credits(self) -> Decimal:
         return sum(
             (line.amount for line in self.lines if line.side is EntrySide.CREDIT),
-            Decimal("0"),
+            Decimal(0),
         )
 
 
-def build_reversal(original: JournalEntry, *, reversal_id: str, reference: str,
-                   created_at: datetime) -> JournalEntry:
+def build_reversal(
+    original: JournalEntry, *, reversal_id: str, reference: str, created_at: datetime
+) -> JournalEntry:
     """Build a balanced, linked reversal; caller must authorize and persist it."""
     if original.status is not JournalStatus.POSTED:
         raise ValueError("only a posted journal entry can be reversed")
