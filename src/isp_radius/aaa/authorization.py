@@ -4,10 +4,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from ipaddress import ip_address
 
-from isp_radius.adapters.radius_attributes import (
-    BandwidthPolicy,
-    get_radius_attribute_adapter,
-)
+from isp_radius.adapters.radius_attributes import BandwidthPolicy, get_radius_attribute_adapter
 from isp_radius.persistence.accounting_repository import Connection
 
 
