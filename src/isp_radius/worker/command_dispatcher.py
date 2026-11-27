@@ -291,6 +291,7 @@ def configure_logging() -> None:
     root.setLevel(os.environ.get("LOG_LEVEL", "INFO").upper())
 
 def start_health_server(worker: RadiusCommandWorker) -> ThreadingHTTPServer:
+    """Expose loopback-only liveness, readiness and queue-aware Prometheus metrics."""
     class Handler(BaseHTTPRequestHandler):
         def respond(self, code: int, body: str, content_type: str = "application/json") -> None:
             data = body.encode("utf-8")
@@ -299,29 +300,78 @@ def start_health_server(worker: RadiusCommandWorker) -> ThreadingHTTPServer:
             self.send_header("Content-Length", str(len(data)))
             self.end_headers()
             self.wfile.write(data)
+
         def do_GET(self) -> None:
             age = time.monotonic() - worker.last_cycle_at
-            ready = worker.last_cycle_ok and age <= max(30, worker.config.recovery_interval * 3)
+            ready = worker.last_cycle_ok and age <= max(
+                30, worker.config.recovery_interval * 3
+            )
             if self.path == "/health/live":
                 self.respond(200, json.dumps({"status": "alive"}))
             elif self.path == "/health/ready":
-                self.respond(200 if ready else 503, json.dumps({"status": "ready" if ready else "not_ready"}))
+                state = "ready" if ready else "not_ready"
+                self.respond(200 if ready else 503, json.dumps({"status": state}))
             elif self.path == "/metrics":
-                body = ("# TYPE isp_radius_worker_processed_total counter\\n"
+                try:
+                    with worker.pool.connection(timeout=2) as connection:
+                        cursor = connection.cursor()
+                        try:
+                            cursor.execute(
+                                """
+                                SELECT
+                                  count(*) FILTER (WHERE status = 'pending'),
+                                  COALESCE(EXTRACT(EPOCH FROM
+                                    (now() - min(created_at) FILTER
+                                      (WHERE status = 'pending'))), 0)::bigint,
+                                  count(*) FILTER (WHERE status = 'processing'),
+                                  count(*) FILTER (WHERE status = 'failed'
+                                    AND completed_at >= now() - interval '15 minutes'),
+                                  count(*) FILTER (WHERE status = 'rejected'
+                                    AND completed_at >= now() - interval '15 minutes')
+                                FROM dynamic_authorization_requests
+                                """
+                            )
+                            pending, oldest, processing, failed_15m, rejected_15m = (
+                                cursor.fetchone()
+                            )
+                        finally:
+                            cursor.close()
+                    body = (
+                        "# TYPE isp_radius_worker_processed_total counter\\n"
                         f"isp_radius_worker_processed_total {worker.total_processed}\\n"
                         "# TYPE isp_radius_worker_cycle_errors_total counter\\n"
                         f"isp_radius_worker_cycle_errors_total {worker.total_cycle_errors}\\n"
                         "# TYPE isp_radius_worker_ready gauge\\n"
-                        f"isp_radius_worker_ready {1 if ready else 0}\\n")
-                self.respond(200, body, "text/plain; version=0.0.4; charset=utf-8")
+                        f"isp_radius_worker_ready {1 if ready else 0}\\n"
+                        "# TYPE isp_radius_worker_queue_pending gauge\\n"
+                        f"isp_radius_worker_queue_pending {pending}\\n"
+                        "# TYPE isp_radius_worker_queue_oldest_pending_seconds gauge\\n"
+                        f"isp_radius_worker_queue_oldest_pending_seconds {oldest}\\n"
+                        "# TYPE isp_radius_worker_queue_processing gauge\\n"
+                        f"isp_radius_worker_queue_processing {processing}\\n"
+                        "# TYPE isp_radius_worker_commands_failed_last_15m gauge\\n"
+                        f"isp_radius_worker_commands_failed_last_15m {failed_15m}\\n"
+                        "# TYPE isp_radius_worker_commands_rejected_last_15m gauge\\n"
+                        f"isp_radius_worker_commands_rejected_last_15m {rejected_15m}\\n"
+                    )
+                    self.respond(
+                        200, body, "text/plain; version=0.0.4; charset=utf-8"
+                    )
+                except Exception:
+                    logger.exception("worker_metrics_collection_failed")
+                    self.respond(503, "metrics_unavailable\\n", "text/plain")
             else:
                 self.respond(404, json.dumps({"error": "not_found"}))
+
         def log_message(self, fmt: str, *args) -> None:
             logger.debug("health_http %s", fmt % args)
+
     server = ThreadingHTTPServer(("127.0.0.1", worker.config.health_port), Handler)
     server.daemon_threads = True
     import threading
-    threading.Thread(target=server.serve_forever, name="worker-health", daemon=True).start()
+    threading.Thread(
+        target=server.serve_forever, name="worker-health", daemon=True
+    ).start()
     logger.info("worker_health_listener_started port=%d", worker.config.health_port)
     return server
 
