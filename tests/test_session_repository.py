@@ -58,7 +58,6 @@ def test_start_creates_active_projection_with_start_time():
     assert cursor.parameters[8] is None
     assert "WHERE subscriber_sessions.status = 'active'" in cursor.statement
     assert "AND subscriber_sessions.username = EXCLUDED.username" in cursor.statement
-    assert "username = EXCLUDED.username" not in cursor.statement
     assert cursor.closed
 
 

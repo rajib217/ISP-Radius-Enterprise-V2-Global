@@ -221,6 +221,15 @@ def test_all_migrations_and_accounting_session_lifecycle():
         assert row[5] == 600
         assert row[6] == 20
         assert row[7] == "User-Request"
+        owner = connection.execute(
+            """
+            SELECT username FROM subscriber_sessions
+             WHERE tenant_id = %s AND nas_identifier = 'integration-bng'
+               AND session_id = 'integration-session'
+            """,
+            (tenant_id,),
+        ).fetchone()
+        assert owner[0] == "integration-subscriber"
 
         counts = connection.execute(
             "SELECT COUNT(*) FROM accounting_events WHERE tenant_id = %s",
