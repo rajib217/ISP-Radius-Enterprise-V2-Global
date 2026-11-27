@@ -150,9 +150,8 @@ class RadiusCommandWorker:
         error_code: str | None = None,
         retry_after_seconds: int | None = None,
     ) -> bool:
-        with self.pool.connection() as connection:
-            with connection.transaction():
-                return finish_leased_command(
+        with self.pool.connection() as connection, connection.transaction():
+            return finish_leased_command(
                     connection,
                     tenant_id=command.tenant_id,
                     command_id=command.id,
@@ -165,9 +164,8 @@ class RadiusCommandWorker:
     def _recover_expired(self, now: float) -> int:
         if now - self._last_recovery < self.config.recovery_interval:
             return 0
-        with self.pool.connection() as connection:
-            with connection.transaction():
-                count = requeue_expired_command_leases(
+        with self.pool.connection() as connection, connection.transaction():
+            count = requeue_expired_command_leases(
                     connection, max_attempts=self.config.max_attempts
                 )
         self._last_recovery = now
