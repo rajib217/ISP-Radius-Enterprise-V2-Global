@@ -2,7 +2,7 @@
 
 Vendor-neutral AAA and ISP network operations platform. This is a separate V2 codebase; V1 remains unchanged: https://github.com/rajib217/ISP-Radius-Enterprise
 
-**Status:** early implementation. Includes normalized and idempotent RADIUS accounting ingestion, transactional PostgreSQL session projection, Argon2id subscriber authentication, a private REST API, interactive Argon2id password provisioning, explicit RADIUS reply profiles, and FreeRADIUS 3.2 PAP authentication, authorization and accounting templates. MikroTik and generic WISPr bandwidth adapters are covered by unit tests and PostgreSQL integration. CI exercises PostgreSQL 16 migrations and accounting lifecycle. The API uses a bounded per-worker PostgreSQL connection pool. Production validation remains pending: CHAP/MS-CHAP/EAP, CoA/Disconnect, API rate limiting, HA, load testing, FreeRADIUS config parsing on the target distribution, and live NAS validation are not complete.
+**Status:** early implementation. Includes normalized and idempotent RADIUS accounting ingestion, transactional PostgreSQL session projection, Argon2id subscriber authentication, a private REST API, interactive Argon2id password provisioning, explicit RADIUS reply profiles, and FreeRADIUS 3.2 PAP authentication, authorization and accounting templates. A tenant-scoped CoA/Disconnect command domain and durable audit outbox are implemented; MikroTik bandwidth CoA attributes are generated from the explicit RouterOS profile. The outbox does not yet transmit packets. RFC 5176 packet encoding/verification, worker leasing/retry, operator API authentication/RBAC, and live NAS tests remain pending. CI exercises PostgreSQL 16 migrations and accounting lifecycle. The API uses a bounded per-worker PostgreSQL connection pool. Production validation remains pending: CHAP/MS-CHAP/EAP, API rate limiting, HA, load testing, FreeRADIUS config parsing on the target distribution, and live NAS validation are not complete.
 
 ## Product goals
 - RADIUS AAA: authentication, authorization, accounting, session lifecycle, CoA and disconnect.
@@ -23,7 +23,7 @@ Vendor-neutral AAA and ISP network operations platform. This is a separate V2 co
 7. Preserve V1 as a reference and migration source, never as a write target.
 
 ## Initial repository layout
-- `src/isp_radius/aaa/`: normalized accounting and Argon2id authentication
+- `src/isp_radius/aaa/`: normalized accounting, Argon2id authentication, and CoA/Disconnect command domain
 - `src/isp_radius/api/`: private REST authentication, authorization and accounting API
 - `deploy/freeradius/3.2/`: FreeRADIUS integration templates
 - `src/isp_radius/domain/`: tenant, subscriber, service-plan and NAS value objects
