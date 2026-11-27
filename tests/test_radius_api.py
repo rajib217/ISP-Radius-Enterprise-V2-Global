@@ -84,7 +84,14 @@ def test_radius_rest_endpoint_rejects_invalid_password():
 
 
 def test_monitoring_endpoint_requires_bearer_token():
-    response = TestClient(app).get("/monitoring/sessions")
+    def override_connection():
+        yield object()
+
+    app.dependency_overrides[_database_connection] = override_connection
+    try:
+        response = TestClient(app).get("/monitoring/sessions")
+    finally:
+        app.dependency_overrides.clear()
     assert response.status_code == 401
 
 
@@ -146,7 +153,14 @@ def test_monitoring_endpoint_rejects_missing_read_permission(monkeypatch):
             }
         }),
     )
-    response = TestClient(app).get(
-        "/monitoring/sessions", headers={"Authorization": f"Bearer {token}"}
-    )
+    def override_connection():
+        yield object()
+
+    app.dependency_overrides[_database_connection] = override_connection
+    try:
+        response = TestClient(app).get(
+            "/monitoring/sessions", headers={"Authorization": f"Bearer {token}"}
+        )
+    finally:
+        app.dependency_overrides.clear()
     assert response.status_code == 403
