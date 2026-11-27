@@ -51,3 +51,21 @@ ruff check src tests
 
 ## License
 Apache License 2.0. See [LICENSE](LICENSE).
+
+
+## Read-only subscriber session monitoring
+
+Endpoints: `GET /monitoring/sessions` and `GET /monitoring/sessions/summary`.
+
+Configure `MONITORING_API_KEY_HASHES` as a JSON object keyed by lowercase
+SHA-256 bearer-token hashes. Each value must contain `tenant_id` and a
+`permissions` array including `sessions:read`. Generate a token and digest:
+
+```bash
+python -c 'import hashlib,secrets; key=secrets.token_urlsafe(32); print("API_KEY="+key); print("SHA256="+hashlib.sha256(key.encode()).hexdigest())'
+```
+
+Keep the API key secret and store only its digest in deployment configuration.
+Use TLS, restrict network access, rotate keys, and keep configuration in a
+deployment secret store. A stale session means accounting updates are overdue,
+not that disconnection is confirmed.

@@ -81,3 +81,72 @@ def test_radius_rest_endpoint_rejects_invalid_password():
         app.dependency_overrides.clear()
 
     assert response.status_code == 401
+
+
+def test_monitoring_endpoint_requires_bearer_token():
+    response = TestClient(app).get("/monitoring/sessions")
+    assert response.status_code == 401
+
+
+def test_monitoring_endpoint_scopes_queries_to_api_key_tenant(monkeypatch):
+    import hashlib
+    import json
+
+    tenant_id = str(uuid4())
+    token = "test-monitoring-token"
+    token_hash = hashlib.sha256(token.encode()).hexdigest()
+    monkeypatch.setenv(
+        "MONITORING_API_KEY_HASHES",
+        json.dumps({token_hash: {"tenant_id": tenant_id, "permissions": ["sessions:read"]}}),
+    )
+
+    class MonitoringCursor:
+        def execute(self, statement, parameters):
+            self.statement = statement
+            self.parameters = parameters
+        def fetchall(self):
+            return []
+        def close(self):
+            pass
+
+    class MonitoringConnection:
+        def __init__(self):
+            self.query_cursor = MonitoringCursor()
+        def cursor(self):
+            return self.query_cursor
+
+    connection = MonitoringConnection()
+    def override_connection():
+        yield connection
+
+    app.dependency_overrides[_database_connection] = override_connection
+    try:
+        response = TestClient(app).get(
+            "/monitoring/sessions?state=online",
+            headers={"Authorization": f"Bearer {token}"},
+        )
+    finally:
+        app.dependency_overrides.clear()
+
+    assert response.status_code == 200
+    assert response.json()["items"] == []
+    assert connection.query_cursor.parameters[1] == tenant_id
+
+
+def test_monitoring_endpoint_rejects_missing_read_permission(monkeypatch):
+    import hashlib
+    import json
+
+    token = "no-read-permission"
+    monkeypatch.setenv(
+        "MONITORING_API_KEY_HASHES",
+        json.dumps({
+            hashlib.sha256(token.encode()).hexdigest(): {
+                "tenant_id": str(uuid4()), "permissions": ["sessions:write"]
+            }
+        }),
+    )
+    response = TestClient(app).get(
+        "/monitoring/sessions", headers={"Authorization": f"Bearer {token}"}
+    )
+    assert response.status_code == 403

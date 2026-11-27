@@ -1,6 +1,9 @@
 """Private REST endpoint consumed by FreeRADIUS rlm_rest."""
 from __future__ import annotations
 
+import hashlib
+import hmac
+import json
 import os
 from collections.abc import AsyncIterator, Generator
 from contextlib import asynccontextmanager
@@ -8,7 +11,7 @@ from ipaddress import ip_address
 from urllib.parse import parse_qs
 
 import psycopg
-from fastapi import Depends, FastAPI, HTTPException, Request, Response, status
+from fastapi import Depends, FastAPI, Header, HTTPException, Query, Request, Response, status
 from psycopg_pool import ConnectionPool, PoolTimeout
 from starlette.concurrency import run_in_threadpool
 
@@ -16,6 +19,10 @@ from isp_radius.aaa.accounting import normalize_accounting
 from isp_radius.aaa.authentication import authenticate_subscriber
 from isp_radius.aaa.authorization import authorize_subscriber
 from isp_radius.persistence.session_repository import record_accounting_event_with_usage
+from isp_radius.persistence.session_monitoring_repository import (
+    get_subscriber_session_summary,
+    list_subscriber_sessions,
+)
 
 
 def _pool_sizes() -> tuple[int, int]:
@@ -73,6 +80,37 @@ def _database_connection(request: Request) -> Generator[psycopg.Connection, None
 
 
 _database_dependency = Depends(_database_connection)
+
+
+def _monitoring_principal(authorization: str | None) -> str:
+    """Resolve a read-only tenant principal from SHA-256 bearer-token hashes."""
+    if not authorization or not authorization.startswith("Bearer "):
+        raise HTTPException(status_code=401, detail="Monitoring authentication required")
+    token = authorization[7:].strip()
+    if not token or len(token) > 512:
+        raise HTTPException(status_code=401, detail="Invalid monitoring credentials")
+    try:
+        entries = json.loads(os.environ.get("MONITORING_API_KEY_HASHES", ""))
+    except (TypeError, json.JSONDecodeError):
+        raise HTTPException(status_code=503, detail="Monitoring authentication is unavailable") from None
+    if not isinstance(entries, dict) or not entries:
+        raise HTTPException(status_code=503, detail="Monitoring authentication is unavailable")
+    supplied_hash = hashlib.sha256(token.encode("utf-8")).hexdigest()
+    principal = None
+    for key_hash, candidate in entries.items():
+        if isinstance(key_hash, str) and hmac.compare_digest(supplied_hash, key_hash.lower()):
+            principal = candidate
+    if not isinstance(principal, dict):
+        raise HTTPException(status_code=401, detail="Invalid monitoring credentials")
+    permissions = principal.get("permissions")
+    if not isinstance(permissions, list) or "sessions:read" not in permissions:
+        raise HTTPException(status_code=403, detail="Monitoring permission denied")
+    try:
+        from uuid import UUID
+        return str(UUID(principal.get("tenant_id")))
+    except (ValueError, TypeError, AttributeError):
+        raise HTTPException(status_code=503, detail="Monitoring principal is misconfigured") from None
+
 
 
 @app.get("/health/live")
@@ -218,3 +256,43 @@ async def radius_accounting(
         raise HTTPException(status_code=400, detail="Invalid accounting attributes") from exc
 
     return Response(status_code=status.HTTP_204_NO_CONTENT)
+
+
+@app.get("/monitoring/sessions")
+def monitoring_sessions(
+    authorization: str | None = Header(default=None),
+    state: str | None = Query(default=None),
+    search: str | None = Query(default=None, max_length=128),
+    nas_identifier: str | None = Query(default=None, max_length=253),
+    stale_after_seconds: int = Query(default=300, ge=30, le=86400),
+    limit: int = Query(default=50, ge=1, le=200),
+    offset: int = Query(default=0, ge=0, le=1_000_000),
+    connection: psycopg.Connection = _database_dependency,
+) -> dict[str, object]:
+    """List sessions for the authenticated tenant."""
+    tenant_id = _monitoring_principal(authorization)
+    try:
+        items = list_subscriber_sessions(
+            connection, tenant_id=tenant_id, state=state, search=search,
+            nas_identifier=nas_identifier, stale_after_seconds=stale_after_seconds,
+            limit=limit, offset=offset,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    return {"items": items, "limit": limit, "offset": offset}
+
+
+@app.get("/monitoring/sessions/summary")
+def monitoring_session_summary(
+    authorization: str | None = Header(default=None),
+    stale_after_seconds: int = Query(default=300, ge=30, le=86400),
+    connection: psycopg.Connection = _database_dependency,
+) -> dict[str, int]:
+    """Return tenant-scoped session counts and usage counters."""
+    tenant_id = _monitoring_principal(authorization)
+    try:
+        return get_subscriber_session_summary(
+            connection, tenant_id=tenant_id, stale_after_seconds=stale_after_seconds,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
