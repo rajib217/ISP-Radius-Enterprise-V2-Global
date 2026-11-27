@@ -2,7 +2,7 @@
 
 Vendor-neutral AAA and ISP network operations platform. This is a separate V2 codebase; V1 remains unchanged: https://github.com/rajib217/ISP-Radius-Enterprise
 
-**Status:** early domain foundation. Accounting normalization, idempotent event persistence, current-session projection, tenant/subscriber/plan/NAS value objects and balanced journal primitives have automated unit tests. This is not yet a production AAA server, billing application, database-backed deployment or verified vendor integration.
+**Status:** early implementation. Includes normalized and idempotent accounting ingestion, PostgreSQL session projection, Argon2id subscriber authentication, a private REST endpoint, and a FreeRADIUS 3.2 PAP integration template. PostgreSQL 16 CI tests exercise migrations and authentication. This is not production-ready: CHAP/MS-CHAP/EAP, reply attributes, RADIUS accounting packet integration, pooling, rate limiting, HA and live NAS validation remain pending.
 
 ## Product goals
 - RADIUS AAA: authentication, authorization, accounting, session lifecycle, CoA and disconnect.
@@ -23,7 +23,7 @@ Vendor-neutral AAA and ISP network operations platform. This is a separate V2 co
 7. Preserve V1 as a reference and migration source, never as a write target.
 
 ## Initial repository layout
-- `src/isp_radius/aaa/`: normalized RADIUS accounting domain boundary
+- `src/isp_radius/aaa/`: normalized accounting and Argon2id authentication\n- `src/isp_radius/api/`: private REST authentication API\n- `deploy/freeradius/3.2/`: FreeRADIUS PAP integration templates
 - `src/isp_radius/domain/`: tenant, subscriber, service-plan and NAS value objects
 - `src/isp_radius/finance/`: currency-safe journal and reversal primitives
 - `src/isp_radius/persistence/`: tenant-scoped accounting event and session repositories
