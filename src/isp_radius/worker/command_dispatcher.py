@@ -129,7 +129,7 @@ class RadiusCommandWorker:
         self._last_recovery = 0.0
         self.last_cycle_at = 0.0
         self.last_cycle_ok = False
-        self.total_processed = 0
+        self.total_leased = 0
         self.total_cycle_errors = 0
 
     def _lease_batch(self) -> list[LeasedRadiusCommand]:
@@ -257,7 +257,7 @@ class RadiusCommandWorker:
                 processed = self.run_once()
                 self.last_cycle_at = time.monotonic()
                 self.last_cycle_ok = True
-                self.total_processed += processed
+                self.total_leased += processed
             except Exception:
                 logger.exception("radius_command_worker_cycle_failed")
                 self.last_cycle_at = time.monotonic()
@@ -337,8 +337,8 @@ def start_health_server(worker: RadiusCommandWorker) -> ThreadingHTTPServer:
                         finally:
                             cursor.close()
                     body = (
-                        "# TYPE isp_radius_worker_processed_total counter\n"
-                        f"isp_radius_worker_processed_total {worker.total_processed}\n"
+                        "# TYPE isp_radius_worker_commands_leased_total counter\n"
+                        f"isp_radius_worker_commands_leased_total {worker.total_leased}\n"
                         "# TYPE isp_radius_worker_cycle_errors_total counter\n"
                         f"isp_radius_worker_cycle_errors_total {worker.total_cycle_errors}\n"
                         "# TYPE isp_radius_worker_ready gauge\n"
