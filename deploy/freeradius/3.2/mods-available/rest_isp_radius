@@ -1,4 +1,4 @@
-# FreeRADIUS 3.2.x REST authentication and authorization instance.
+# FreeRADIUS 3.2.x REST authentication, authorization and accounting instance.
 # Enable by linking this file into mods-enabled/rest_isp_radius.
 rest rest_isp_radius {
     connect_uri = "https://127.0.0.1:8443"
@@ -24,6 +24,14 @@ rest rest_isp_radius {
         method = "post"
         body = "post"
         data = "username=%{urlquote:%{User-Name}}&password=%{urlquote:%{User-Password}}&nas_ip=%{urlquote:%{%{Packet-Src-IP-Address}:-%{Packet-Src-IPv6-Address}}}"
+        tls = ${..tls}
+    }
+
+    accounting {
+        uri = "${..connect_uri}/radius/accounting"
+        method = "post"
+        body = "post"
+        data = "nas_ip=%{urlquote:%{%{Packet-Src-IP-Address}:-%{Packet-Src-IPv6-Address}}}&acct_status_type=%{urlquote:%{Acct-Status-Type}}&acct_session_id=%{urlquote:%{Acct-Session-Id}}&username=%{urlquote:%{User-Name}}&event_timestamp=%{urlquote:%{Event-Timestamp}}&acct_delay_time=%{urlquote:%{Acct-Delay-Time}}&acct_input_octets=%{urlquote:%{Acct-Input-Octets}}&acct_input_gigawords=%{urlquote:%{Acct-Input-Gigawords}}&acct_output_octets=%{urlquote:%{Acct-Output-Octets}}&acct_output_gigawords=%{urlquote:%{Acct-Output-Gigawords}}&acct_session_time=%{urlquote:%{Acct-Session-Time}}&acct_terminate_cause=%{urlquote:%{Acct-Terminate-Cause}}"
         tls = ${..tls}
     }
 }
