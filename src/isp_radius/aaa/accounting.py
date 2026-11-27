@@ -8,7 +8,7 @@ from __future__ import annotations
 import hashlib
 import json
 from dataclasses import dataclass
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from enum import StrEnum
 from typing import Any
 
@@ -94,13 +94,19 @@ class AccountingEvent:
 
     @property
     def idempotency_key(self) -> str:
-        """Stable digest for an exact accounting event retransmission."""
+        """Stable digest for retransmissions, including NASes without Event-Timestamp.
+
+        Event time is intentionally excluded. When a NAS omits Event-Timestamp,
+        the server must estimate event time from receipt time; including that
+        estimate would make every retransmission look like a new event. An
+        identical status/counter snapshot for one NAS session is semantically
+        idempotent, even if the NAS sends it again later without counter changes.
+        """
         payload = {
             "nas_id": self.nas_id.strip(),
             "session_id": self.session_id.strip(),
             "username": self.username.strip(),
             "status": self.status.value,
-            "event_time": self.event_time.isoformat(),
             "input_octets": self.input_octets,
             "output_octets": self.output_octets,
             "session_seconds": self.session_seconds,
@@ -110,11 +116,14 @@ class AccountingEvent:
         return hashlib.sha256(canonical.encode("utf-8")).hexdigest()
 
 
-def normalize_accounting(attributes: dict[str, Any]) -> AccountingEvent:
-    """Normalize a decoded RADIUS Accounting-Request attribute mapping.
+def normalize_accounting(
+    attributes: dict[str, Any], *, received_at: datetime | None = None
+) -> AccountingEvent:
+    """Normalize decoded RADIUS Accounting-Request attributes.
 
-    NAS-Identifier is preferred; NAS-IP-Address is the fallback. The caller
-    must authenticate/validate the packet source and shared secret separately.
+    The caller must authenticate the packet source and shared secret separately.
+    If Event-Timestamp is absent, receipt time minus Acct-Delay-Time is used for
+    the projection timestamp. The idempotency digest remains stable regardless.
     """
     raw_status = str(attributes.get("Acct-Status-Type", "")).strip()
     status = _STATUS_CODES.get(raw_status)
@@ -127,8 +136,18 @@ def normalize_accounting(attributes: dict[str, Any]) -> AccountingEvent:
     nas_id = str(attributes.get("NAS-Identifier") or attributes.get("NAS-IP-Address") or "").strip()
     session_id = str(attributes.get("Acct-Session-Id") or "").strip()
     username = str(attributes.get("User-Name") or "").strip()
-    raw_time = attributes.get("Event-Timestamp") or attributes.get("event_time")
-    event_time = _event_time(raw_time)
+    raw_time = attributes.get("Event-Timestamp")
+    if raw_time in (None, ""):
+        raw_time = attributes.get("event_time")
+
+    if raw_time in (None, ""):
+        base_time = received_at or datetime.now(UTC)
+        if base_time.tzinfo is None or base_time.utcoffset() is None:
+            raise ValueError("received_at must include a timezone")
+        delay = _non_negative_int(attributes.get("Acct-Delay-Time"), "Acct-Delay-Time") or 0
+        event_time = base_time - timedelta(seconds=delay)
+    else:
+        event_time = _event_time(raw_time)
 
     return AccountingEvent(
         nas_id=nas_id,
