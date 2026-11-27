@@ -2,8 +2,7 @@ from contextlib import contextmanager
 from unittest.mock import Mock
 
 import pytest
-from fastapi import HTTPException
-from fastapi import Request
+from fastapi import HTTPException, Request
 from psycopg_pool import PoolTimeout
 
 from isp_radius.api.app import _database_connection, _pool_sizes, app
