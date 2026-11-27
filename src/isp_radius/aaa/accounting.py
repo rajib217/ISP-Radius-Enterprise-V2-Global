@@ -98,9 +98,9 @@ class AccountingEvent:
             if len(value) > maximum:
                 raise ValueError(f"{name} exceeds {maximum} characters")
         if not isinstance(self.status, AccountingStatus):
-            raise ValueError("status must be an AccountingStatus")
+            raise TypeError("status must be an AccountingStatus")
         if not isinstance(self.event_time, datetime):
-            raise ValueError("event_time must be a datetime")
+            raise TypeError("event_time must be a datetime")
         if self.event_time.tzinfo is None or self.event_time.utcoffset() is None:
             raise ValueError("event_time must include a timezone")
         for name in ("input_octets", "output_octets"):
