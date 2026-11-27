@@ -1,6 +1,7 @@
 # Minimal dictionary for the attributes emitted by this application.
 ATTRIBUTE User-Name 1 string
 ATTRIBUTE NAS-IP-Address 4 ipaddr
+ATTRIBUTE NAS-IPv6-Address 95 ipv6addr
 ATTRIBUTE Acct-Session-Id 44 string
 ATTRIBUTE Error-Cause 101 integer
 VENDOR WISPr 14122

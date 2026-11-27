@@ -102,6 +102,11 @@ class PyradCoaTransport:
             retries=self.retries,
         )
         attributes = {key.replace("-", "_"): value for key, value in command.attributes.items()}
+        nas_ip = ip_address(endpoint.address)
+        if nas_ip.version == 4:
+            attributes["NAS_IP_Address"] = str(nas_ip)
+        else:
+            attributes["NAS_IPv6_Address"] = str(nas_ip)
         if command.command_type == "disconnect":
             request = client.CreateCoAPacket(
                 code=packet.DisconnectRequest, **attributes
