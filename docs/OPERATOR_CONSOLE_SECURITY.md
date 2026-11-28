@@ -29,7 +29,9 @@ The browser must never receive `MONITORING_API_KEY_HASHES`, a raw monitoring bea
 - Provide server-side logout/revocation and prevent session fixation.
 - Rate-limit login and recovery endpoints; avoid account enumeration.
 - Use generic authentication failures and security audit events without logging passwords, cookies, tokens, or secrets.
-- Apply a restrictive Content Security Policy and appropriate security headers.
+- Apply API security headers: CSP for non-HTML API responses, frame/content-type protections, referrer and permissions policies, and HSTS only on HTTPS requests. A future frontend must serve its own document CSP rather than inheriting this API-only policy.
+- Operator API responses use `Cache-Control: no-store`.
+- Use the reusable `require_operator_permission("resource:action")` dependency on every protected operator route. Do not rely on UI hiding as authorization.
 
 ## BFF requirements
 - The BFF authenticates the browser session, checks the operator's permission and derives tenant identity before calling the private monitoring API.
@@ -52,8 +54,10 @@ Before browser release:
 - Identity, tenant membership, login/session lifecycle, CSRF/origin checks, login throttling, role mapping and audit storage are implemented and migrated.
 - Automated tests cover login, tenant selection, session lookup, CSRF rejection, logout revocation, missing BFF sessions, denied roles and session-derived tenant scope. Cross-tenant isolation tests remain required for each additional route.
 - Cross-tenant access tests cover every BFF route and repository query.
+- Security headers are tested, and HSTS is emitted only for HTTPS requests.
+- Each operator route declares its required permission through a reusable dependency.
 - Browser bundles and source maps are scanned to confirm no service secrets are present.
-- CSRF, 30-minute idle expiry, 12-hour absolute expiry, revocation and login throttling are tested. Security headers and MFA remain outstanding.
+- CSRF, 30-minute idle expiry, 12-hour absolute expiry, revocation and login throttling are tested. Security headers are implemented; MFA remains outstanding.
 - UI includes loading, empty, stale-data, API-error and permission-denied states.
 - A security review and deployment runbook are completed.
 

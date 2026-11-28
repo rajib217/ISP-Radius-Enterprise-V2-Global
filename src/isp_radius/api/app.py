@@ -87,6 +87,29 @@ app = FastAPI(
 )
 
 
+@app.middleware("http")
+async def security_headers(request: Request, call_next):
+    """Apply restrictive headers to API responses without constraining a future UI."""
+    response = await call_next(request)
+    response.headers.setdefault("X-Content-Type-Options", "nosniff")
+    response.headers.setdefault("X-Frame-Options", "DENY")
+    response.headers.setdefault("Referrer-Policy", "strict-origin-when-cross-origin")
+    response.headers.setdefault("Permissions-Policy", "camera=(), microphone=(), geolocation=()")
+    response.headers.setdefault("Cross-Origin-Opener-Policy", "same-origin")
+    response.headers.setdefault(
+        "Content-Security-Policy",
+        "default-src 'none'; base-uri 'none'; form-action 'self'; "
+        "frame-ancestors 'none'; object-src 'none'",
+    )
+    if request.url.scheme == "https":
+        response.headers.setdefault(
+            "Strict-Transport-Security", "max-age=31536000; includeSubDomains"
+        )
+    if request.url.path.startswith("/operator/"):
+        response.headers.setdefault("Cache-Control", "no-store")
+    return response
+
+
 def _database_connection(request: Request) -> Generator[psycopg.Connection, None, None]:
     pool: ConnectionPool | None = getattr(request.app.state, "db_pool", None)
     if pool is None:
@@ -192,6 +215,21 @@ def _operator_principal_dependency(
         role=str(row[4]),
         csrf_token_hash=str(row[5]),
     )
+
+
+def require_operator_permission(permission: str):
+    """Build a fail-closed dependency for one explicit operator permission."""
+    if not permission or ":" not in permission:
+        raise ValueError("permission must use the resource:action format")
+
+    def dependency(
+        principal: OperatorPrincipal = Depends(_operator_principal_dependency),
+    ) -> OperatorPrincipal:
+        if not principal.allows(permission):
+            raise HTTPException(status_code=403, detail="Operator permission denied")
+        return principal
+
+    return dependency
 
 
 _operator_principal_dependency_injected = Depends(_operator_principal_dependency)
@@ -419,7 +457,7 @@ def operator_logout(
 
 @app.get("/operator/monitoring/sessions")
 def operator_monitoring_sessions(
-    principal: OperatorPrincipal = _operator_principal_dependency_injected,
+    principal: OperatorPrincipal = Depends(require_operator_permission("sessions:read")),
     state: str | None = Query(default=None),
     search: str | None = Query(default=None, max_length=128),
     nas_identifier: str | None = Query(default=None, max_length=253),
@@ -429,8 +467,6 @@ def operator_monitoring_sessions(
     connection: psycopg.Connection = _database_dependency,
 ) -> dict[str, object]:
     """Browser-safe, read-only monitoring BFF scoped to the operator session."""
-    if not principal.allows("sessions:read"):
-        raise HTTPException(status_code=403, detail="Operator permission denied")
     try:
         items = list_subscriber_sessions(
             connection,
@@ -449,13 +485,11 @@ def operator_monitoring_sessions(
 
 @app.get("/operator/monitoring/sessions/summary")
 def operator_monitoring_session_summary(
-    principal: OperatorPrincipal = _operator_principal_dependency_injected,
+    principal: OperatorPrincipal = Depends(require_operator_permission("sessions:read")),
     stale_after_seconds: int = Query(default=300, ge=30, le=86400),
     connection: psycopg.Connection = _database_dependency,
 ) -> dict[str, int]:
     """Return monitoring summary for the tenant bound to the operator session."""
-    if not principal.allows("sessions:read"):
-        raise HTTPException(status_code=403, detail="Operator permission denied")
     try:
         return get_subscriber_session_summary(
             connection,

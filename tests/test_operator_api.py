@@ -220,3 +220,63 @@ def test_operator_monitoring_bff_rejects_missing_session_before_session_lookup(m
 
     assert response.status_code == 401
     assert lookup_called is False
+
+
+
+def test_security_headers_are_present_and_hsts_requires_https(monkeypatch):
+    http_client = TestClient(app)
+    http_response = http_client.get("/health/live")
+    assert http_response.status_code == 200
+    assert http_response.headers["x-content-type-options"] == "nosniff"
+    assert http_response.headers["x-frame-options"] == "DENY"
+    assert http_response.headers["referrer-policy"] == "strict-origin-when-cross-origin"
+    assert "default-src 'none'" in http_response.headers["content-security-policy"]
+    assert "strict-transport-security" not in http_response.headers
+
+    https_client = TestClient(app, base_url="https://testserver")
+    https_response = https_client.get("/health/live")
+    assert https_response.headers["strict-transport-security"] == (
+        "max-age=31536000; includeSubDomains"
+    )
+
+
+def test_operator_responses_are_not_cacheable(monkeypatch):
+    client = TestClient(app)
+    response = client.get("/operator/session")
+    assert response.status_code == 401
+    assert response.headers["cache-control"] == "no-store"
+
+
+def test_operator_monitoring_summary_denies_role_without_permission(monkeypatch):
+    user_id, tenant_id = str(uuid4()), str(uuid4())
+    monkeypatch.setenv("APP_ENV", "test")
+    connection = FakeConnection()
+
+    def override_connection():
+        yield connection
+
+    app.dependency_overrides[_database_connection] = override_connection
+    monkeypatch.setattr(
+        "isp_radius.api.app.resolve_operator_session",
+        lambda *_a, **_k: (
+            "session-id", user_id, "billing@example.com", tenant_id, "billing",
+            hash_token("csrf"),
+        ),
+    )
+    repository_called = False
+
+    def fake_summary(*_a, **_k):
+        nonlocal repository_called
+        repository_called = True
+        return {}
+
+    monkeypatch.setattr("isp_radius.api.app.get_subscriber_session_summary", fake_summary)
+    client = TestClient(app)
+    try:
+        client.cookies.set("operator_session", "valid-session-cookie")
+        response = client.get("/operator/monitoring/sessions/summary")
+    finally:
+        app.dependency_overrides.clear()
+
+    assert response.status_code == 403
+    assert repository_called is False
