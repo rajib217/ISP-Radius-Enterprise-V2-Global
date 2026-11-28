@@ -88,3 +88,25 @@ def test_totp_secret_generation_and_uri_are_authenticator_compatible():
     assert "algorithm=SHA1" in uri
     assert "digits=6" in uri
     assert "period=30" in uri
+
+
+
+def test_aws_kms_provider_uses_scoped_encryption_context():
+    from isp_radius.security.aws_kms import AwsKmsDataKeyProvider
+
+    class FakeKms:
+        def generate_data_key(self, **kwargs):
+            assert kwargs["KeyId"] == "alias/operator-totp"
+            assert kwargs["KeySpec"] == "AES_256"
+            assert kwargs["EncryptionContext"]["purpose"] == "operator-totp"
+            return {"Plaintext": b"k" * 32, "CiphertextBlob": b"wrapped", "KeyId": "arn:aws:kms:region:acct:key/id"}
+
+        def decrypt(self, **kwargs):
+            assert kwargs["KeyId"].endswith("key/id")
+            assert kwargs["EncryptionContext"]["application"] == "isp-radius-enterprise"
+            return {"Plaintext": b"k" * 32}
+
+    provider = AwsKmsDataKeyProvider(FakeKms(), key_id="alias/operator-totp")
+    plaintext, wrapped, version = provider.generate_data_key()
+    assert plaintext == b"k" * 32 and wrapped == b"wrapped"
+    assert provider.decrypt_data_key(wrapped_key=wrapped, key_version=version) == plaintext

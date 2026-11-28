@@ -214,9 +214,9 @@ def test_login_mfa_challenge_is_bound_to_tenant():
     )
     assert challenge_id
     assert "tenant_id" in cursor.query
-    assert "'webauthn'" in cursor.query
+    assert "method" in cursor.query
     assert cursor.params == (
-        challenge_id, "user-id", "tenant-id", "e" * 64,
+        challenge_id, "user-id", "tenant-id", "e" * 64, "webauthn",
         "https://console.example.com", "example.com", "expires",
     )
 
@@ -233,7 +233,8 @@ def test_pending_login_challenge_returns_server_bound_tenant():
     )
     assert result == ("challenge-id", "user-id", "tenant-id")
     assert "tenant_id IS NOT NULL" in cursor.query
-    assert "method = 'webauthn'" in cursor.query
+    assert "method = %s" in cursor.query
+    assert cursor.params == ("f" * 64, "webauthn", "https://console.example.com", "example.com")
     assert "consumed_at IS NULL" in cursor.query
     assert "failed_attempts < 5" in cursor.query
 
@@ -252,7 +253,8 @@ def test_login_challenge_consumption_returns_identity_and_tenant_atomically():
     assert "SET consumed_at = now()" in cursor.query
     assert "tenant_id IS NOT NULL" in cursor.query
     assert "expires_at > now()" in cursor.query
-    assert cursor.params == ("1" * 64, "https://console.example.com", "example.com")
+    assert "method = %s" in cursor.query
+    assert cursor.params == ("1" * 64, "webauthn", "https://console.example.com", "example.com")
 
 
 def test_operator_membership_is_revalidated_after_mfa():
@@ -266,3 +268,44 @@ def test_operator_membership_is_revalidated_after_mfa():
     assert "u.status = 'active'" in cursor.query
     assert "m.status = 'active'" in cursor.query
     assert cursor.params == ("user-id", "tenant-id")
+
+
+def test_totp_factor_repository_persists_only_encrypted_material():
+    from isp_radius.persistence.operator_repository import create_operator_totp_factor
+
+    cursor = FakeCursor()
+    create_operator_totp_factor(
+        FakeConnection(cursor), factor_id="factor-id", user_id="user-id",
+        ciphertext=b"ciphertext", nonce=b"n" * 12, wrapped_data_key=b"wrapped",
+        key_version="kms-key-arn", pending_expires_at="expires",
+    )
+    assert "secret_ciphertext" in cursor.query
+    assert "wrapped_data_key" in cursor.query
+    assert b"ciphertext" in cursor.params
+    assert b"wrapped" in cursor.params
+    assert b"plaintext-secret" not in cursor.params
+
+
+def test_totp_factor_activation_stores_enrollment_step_for_replay_protection():
+    from isp_radius.persistence.operator_repository import activate_operator_totp_factor
+
+    cursor = FakeCursor(row=("factor-id",))
+    assert activate_operator_totp_factor(
+        FakeConnection(cursor), factor_id="factor-id", user_id="user-id", accepted_step=123,
+    )
+    assert "status = 'active'" in cursor.query
+    assert "pending_expires_at > now()" in cursor.query
+    assert "last_accepted_step = %s" in cursor.query
+    assert cursor.params == (123, "factor-id", "user-id")
+
+
+def test_login_challenge_can_bind_totp_method():
+    from isp_radius.persistence.operator_repository import create_operator_login_mfa_challenge
+
+    cursor = FakeCursor()
+    create_operator_login_mfa_challenge(
+        FakeConnection(cursor), user_id="user-id", tenant_id="tenant-id",
+        challenge_hash="a" * 64, origin="https://console.example.com",
+        rp_id="example.com", expires_at="expires", method="totp",
+    )
+    assert cursor.params[4] == "totp"

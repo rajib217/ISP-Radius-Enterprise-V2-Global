@@ -12,7 +12,7 @@ from contextlib import asynccontextmanager
 from datetime import UTC, datetime, timedelta
 from ipaddress import ip_address
 from urllib.parse import parse_qs
-from uuid import UUID
+from uuid import UUID, uuid4
 
 import psycopg
 from fastapi import Depends, FastAPI, Header, HTTPException, Query, Request, Response, status
@@ -23,19 +23,24 @@ from isp_radius.aaa.accounting import normalize_accounting
 from isp_radius.aaa.authentication import authenticate_subscriber
 from isp_radius.aaa.authorization import authorize_subscriber
 from isp_radius.persistence.operator_repository import (
+    accept_operator_totp_step,
+    activate_operator_totp_factor,
     clear_operator_login_failures,
     consume_operator_login_mfa_challenge,
     consume_operator_mfa_challenge,
     create_operator_login_mfa_challenge,
     create_operator_mfa_challenge,
     create_operator_session,
+    create_operator_totp_factor,
     create_operator_webauthn_credential,
+    find_active_operator_totp_factor,
     find_active_operator_webauthn_credential,
     find_operator_memberships,
     find_operator_password_hash,
     find_operator_tenant_membership,
     find_pending_operator_login_mfa_challenge,
     find_pending_operator_mfa_challenge,
+    find_pending_operator_totp_factor,
     insert_operator_audit_event,
     list_active_operator_webauthn_credential_ids,
     operator_login_rate_limited,
@@ -62,6 +67,12 @@ from isp_radius.security.operator_auth import (
 )
 from isp_radius.security.webauthn import (
     WebAuthnVerificationError,
+    decrypt_totp_secret,
+    encrypt_totp_secret,
+    generate_totp_secret,
+    totp_provisioning_uri,
+    verify_totp,
+    EncryptedTOTPSecret,
     generate_authentication_options_json,
     generate_registration_options_json,
     generate_webauthn_challenge,
@@ -394,9 +405,33 @@ async def operator_login(
                             encoded_challenge = base64.urlsafe_b64encode(challenge).rstrip(b"=").decode("ascii")
                             login_mfa_data = (encoded_challenge, options)
                         else:
-                            # Temporary bootstrap path: accounts without a passkey can enroll.
-                            # Production MFA enforcement remains disabled until fallback/recovery exists.
-                            tokens = issue_session_tokens()
+                            totp_factor = find_active_operator_totp_factor(
+                                connection, user_id=str(user_id),
+                            )
+                            if totp_factor is not None:
+                                challenge = generate_webauthn_challenge()
+                                origin, rp_id = _operator_webauthn_config(request)
+                                create_operator_login_mfa_challenge(
+                                    connection, user_id=str(user_id), tenant_id=str(membership[4]),
+                                    challenge_hash=hash_webauthn_challenge(challenge),
+                                    origin=origin, rp_id=rp_id,
+                                    expires_at=datetime.now(UTC) + timedelta(minutes=5),
+                                    method="totp",
+                                )
+                                clear_operator_login_failures(
+                                    connection, email_hash=email_hash, ip_hash=ip_hash,
+                                )
+                                insert_operator_audit_event(
+                                    connection, tenant_id=str(membership[4]), actor_user_id=str(user_id),
+                                    actor_kind="operator", action="auth.login.mfa_challenge_issued",
+                                    remote_ip=remote_ip, metadata={"method": "totp"},
+                                )
+                                encoded_challenge = base64.urlsafe_b64encode(challenge).rstrip(b"=").decode("ascii")
+                                login_mfa_data = (encoded_challenge, {"method": "totp"})
+                            else:
+                                # Temporary bootstrap path: accounts without an enrolled factor can enroll.
+                                # Production MFA enforcement remains disabled until bootstrap/recovery is complete.
+                                tokens = issue_session_tokens()
                             existing_token = request.cookies.get("operator_session")
                             if existing_token:
                                 try:
@@ -438,6 +473,8 @@ async def operator_login(
         raise HTTPException(status_code=login_error[0], detail=login_error[1])
     if login_mfa_data is not None:
         challenge, options = login_mfa_data
+        if options.get("method") == "totp":
+            return {"mfa_required": True, "method": "totp", "challenge": challenge}
         return {"mfa_required": True, "method": "webauthn", "challenge": challenge, "publicKey": options}
     if session_data is None:
         raise HTTPException(status_code=401, detail="Invalid email or password")
@@ -484,6 +521,24 @@ def _operator_webauthn_config(request: Request) -> tuple[str, str]:
         raise HTTPException(status_code=503, detail="WebAuthn origin and RP ID do not match")
     return origin, rp_id
 
+
+
+
+def _operator_totp_key_provider(request: Request):
+    """Load and cache the configured AWS KMS data-key provider, failing closed."""
+    provider = getattr(request.app.state, "operator_totp_key_provider", None)
+    if provider is not None:
+        return provider
+    try:
+        from isp_radius.security.aws_kms import AwsKmsDataKeyProvider
+
+        provider = AwsKmsDataKeyProvider.from_environment()
+    except (ImportError, RuntimeError, ValueError):
+        raise HTTPException(
+            status_code=503, detail="TOTP encryption service is not configured",
+        ) from None
+    request.app.state.operator_totp_key_provider = provider
+    return provider
 
 def _decode_webauthn_challenge(value: object) -> bytes:
     if not isinstance(value, str) or not 22 <= len(value) <= 128:
@@ -650,6 +705,248 @@ async def operator_login_webauthn_verify(
         "csrf_token": tokens.csrf_token,
         "expires_at": tokens.expires_at.isoformat(),
     }
+
+
+@app.post("/operator/login/totp/verify")
+async def operator_login_totp_verify(
+    request: Request,
+    response: Response,
+    connection: psycopg.Connection = _database_dependency,
+) -> dict[str, object]:
+    """Verify a tenant-bound TOTP challenge before issuing an operator session."""
+    _operator_origin_guard(request)
+    secure = _operator_cookie_secure()
+    origin, rp_id = _operator_webauthn_config(request)
+    raw_body = await request.body()
+    if len(raw_body) > 4096:
+        raise HTTPException(status_code=413, detail="Request too large")
+    try:
+        payload = json.loads(raw_body)
+    except (UnicodeDecodeError, json.JSONDecodeError):
+        raise HTTPException(status_code=400, detail="Invalid TOTP response") from None
+    if not isinstance(payload, dict):
+        raise HTTPException(status_code=400, detail="Invalid TOTP response")
+    challenge = _decode_webauthn_challenge(payload.get("challenge"))
+    code = payload.get("code")
+    if not isinstance(code, str) or len(code) > 16:
+        raise HTTPException(status_code=400, detail="Invalid TOTP response")
+    challenge_hash = hash_webauthn_challenge(challenge)
+
+    with connection.transaction():
+        pending = find_pending_operator_login_mfa_challenge(
+            connection, challenge_hash=challenge_hash, origin=origin, rp_id=rp_id, method="totp",
+        )
+        if pending is None:
+            raise HTTPException(status_code=400, detail="TOTP login challenge is invalid or expired")
+        challenge_id, user_id, tenant_id = pending
+        factor = find_active_operator_totp_factor(connection, user_id=str(user_id))
+    if factor is None:
+        raise HTTPException(status_code=401, detail="TOTP authentication failed")
+
+    try:
+        secret = decrypt_totp_secret(
+            EncryptedTOTPSecret(
+                ciphertext=bytes(factor[2]), nonce=bytes(factor[3]),
+                wrapped_data_key=bytes(factor[4]), key_version=str(factor[5]),
+            ),
+            user_id=str(user_id), factor_id=str(factor[0]),
+            key_provider=_operator_totp_key_provider(request),
+        )
+        accepted_step = verify_totp(secret, code)
+    except Exception:
+        raise HTTPException(status_code=503, detail="TOTP verification service is unavailable") from None
+
+    if accepted_step is None:
+        with connection.transaction():
+            record_operator_mfa_challenge_failure(connection, challenge_hash=challenge_hash)
+            insert_operator_audit_event(
+                connection, tenant_id=str(tenant_id), actor_user_id=str(user_id),
+                actor_kind="operator", action="auth.login.mfa_failed",
+                remote_ip=_operator_client_ip(request), metadata={"method": "totp"},
+            )
+        raise HTTPException(status_code=401, detail="TOTP authentication failed")
+
+    login_error: tuple[int, str] | None = None
+    session_data: tuple[object, ...] | None = None
+    with connection.transaction():
+        locked = find_pending_operator_login_mfa_challenge(
+            connection, challenge_hash=challenge_hash, origin=origin, rp_id=rp_id, method="totp",
+        )
+        if (
+            locked is None or str(locked[0]) != str(challenge_id)
+            or str(locked[1]) != str(user_id) or str(locked[2]) != str(tenant_id)
+        ):
+            login_error = (409, "TOTP login challenge was already used")
+        elif not accept_operator_totp_step(
+            connection, factor_id=str(factor[0]), user_id=str(user_id), time_step=accepted_step,
+        ):
+            record_operator_mfa_challenge_failure(connection, challenge_hash=challenge_hash)
+            login_error = (401, "TOTP authentication failed")
+        else:
+            consumed = consume_operator_login_mfa_challenge(
+                connection, challenge_hash=challenge_hash, origin=origin,
+                rp_id=rp_id, method="totp",
+            )
+            if consumed is None:
+                login_error = (409, "TOTP login challenge was already used")
+            else:
+                membership = find_operator_tenant_membership(
+                    connection, user_id=str(user_id), tenant_id=str(tenant_id),
+                )
+                if membership is None:
+                    login_error = (403, "Tenant membership is no longer active")
+                else:
+                    canonical_email, role = membership
+                    tokens = issue_session_tokens()
+                    session_id = create_operator_session(
+                        connection, user_id=str(user_id), tenant_id=str(tenant_id),
+                        token_hash=tokens.session_hash, csrf_token_hash=tokens.csrf_hash,
+                        expires_at=tokens.expires_at, remote_ip=_operator_client_ip(request),
+                        user_agent=request.headers.get("user-agent"),
+                    )
+                    insert_operator_audit_event(
+                        connection, tenant_id=str(tenant_id), actor_user_id=str(user_id),
+                        actor_kind="operator", action="auth.login.succeeded",
+                        remote_ip=_operator_client_ip(request), target_type="operator_session",
+                        target_id=session_id, metadata={"role": str(role), "method": "totp"},
+                    )
+                    session_data = (str(canonical_email), str(tenant_id), str(role), tokens)
+
+    if login_error is not None:
+        raise HTTPException(status_code=login_error[0], detail=login_error[1])
+    if session_data is None:
+        raise HTTPException(status_code=401, detail="TOTP authentication failed")
+    canonical_email, tenant_id, role, tokens = session_data
+    response.set_cookie(
+        "operator_session", tokens.session_token, max_age=43200,
+        httponly=True, secure=secure, samesite="lax", path="/",
+    )
+    response.set_cookie(
+        "operator_csrf", tokens.csrf_token, max_age=43200,
+        httponly=False, secure=secure, samesite="lax", path="/",
+    )
+    return {
+        "operator": {"email": canonical_email, "tenant_id": tenant_id, "role": role},
+        "csrf_token": tokens.csrf_token,
+        "expires_at": tokens.expires_at.isoformat(),
+    }
+
+
+@app.post("/operator/totp/enroll")
+async def operator_totp_enroll(
+    request: Request,
+    x_csrf_token: str | None = Header(default=None),
+    principal: OperatorPrincipal = _operator_principal_dependency_injected,
+    connection: psycopg.Connection = _database_dependency,
+) -> dict[str, object]:
+    """Create an encrypted pending TOTP factor after password re-authentication."""
+    _operator_csrf_guard(request, principal, x_csrf_token)
+    raw_body = await request.body()
+    if len(raw_body) > 4096:
+        raise HTTPException(status_code=413, detail="Request too large")
+    try:
+        payload = json.loads(raw_body)
+    except (UnicodeDecodeError, json.JSONDecodeError):
+        raise HTTPException(status_code=400, detail="Invalid TOTP enrollment request") from None
+    if not isinstance(payload, dict):
+        raise HTTPException(status_code=400, detail="Invalid TOTP enrollment request")
+    password = payload.get("password")
+    password_row = find_operator_password_hash(connection, user_id=principal.user_id)
+    if (
+        not isinstance(password, str) or not password or len(password) > 1024
+        or password_row is None or password_row[1] != "active"
+        or not verify_operator_password(password_row[0], password)
+    ):
+        raise HTTPException(status_code=401, detail="Password re-authentication failed")
+
+    factor_id = str(uuid4())
+    secret = generate_totp_secret()
+    try:
+        encrypted = encrypt_totp_secret(
+            secret, user_id=principal.user_id, factor_id=factor_id,
+            key_provider=_operator_totp_key_provider(request),
+        )
+    except Exception:
+        raise HTTPException(status_code=503, detail="TOTP encryption service is unavailable") from None
+    with connection.transaction():
+        create_operator_totp_factor(
+            connection, factor_id=factor_id, user_id=principal.user_id,
+            ciphertext=encrypted.ciphertext, nonce=encrypted.nonce,
+            wrapped_data_key=encrypted.wrapped_data_key, key_version=encrypted.key_version,
+            pending_expires_at=datetime.now(UTC) + timedelta(minutes=10),
+        )
+        insert_operator_audit_event(
+            connection, tenant_id=principal.tenant_id, actor_user_id=principal.user_id,
+            actor_kind="operator", action="auth.totp.enrollment.started",
+            remote_ip=_operator_client_ip(request), metadata={"method": "totp"},
+        )
+    return {
+        "factor_id": factor_id, "secret": secret,
+        "provisioning_uri": totp_provisioning_uri(
+            secret, account_name=principal.email,
+            issuer=os.environ.get("OPERATOR_TOTP_ISSUER", "ISP RADIUS"),
+        ),
+        "expires_in_seconds": 600,
+    }
+
+
+@app.post("/operator/totp/enroll/verify")
+async def operator_totp_enroll_verify(
+    request: Request,
+    x_csrf_token: str | None = Header(default=None),
+    principal: OperatorPrincipal = _operator_principal_dependency_injected,
+    connection: psycopg.Connection = _database_dependency,
+) -> dict[str, object]:
+    """Activate a pending TOTP factor only after a valid authenticator code."""
+    _operator_csrf_guard(request, principal, x_csrf_token)
+    raw_body = await request.body()
+    if len(raw_body) > 4096:
+        raise HTTPException(status_code=413, detail="Request too large")
+    try:
+        payload = json.loads(raw_body)
+    except (UnicodeDecodeError, json.JSONDecodeError):
+        raise HTTPException(status_code=400, detail="Invalid TOTP enrollment response") from None
+    if not isinstance(payload, dict):
+        raise HTTPException(status_code=400, detail="Invalid TOTP enrollment response")
+    try:
+        factor_id = str(UUID(payload.get("factor_id")))
+    except (ValueError, TypeError, AttributeError):
+        raise HTTPException(status_code=400, detail="Invalid TOTP factor") from None
+    code = payload.get("code")
+    if not isinstance(code, str) or len(code) > 16:
+        raise HTTPException(status_code=400, detail="Invalid TOTP code")
+    factor = find_pending_operator_totp_factor(
+        connection, factor_id=factor_id, user_id=principal.user_id,
+    )
+    if factor is None:
+        raise HTTPException(status_code=400, detail="TOTP enrollment is invalid or expired")
+    try:
+        secret = decrypt_totp_secret(
+            EncryptedTOTPSecret(
+                ciphertext=bytes(factor[2]), nonce=bytes(factor[3]),
+                wrapped_data_key=bytes(factor[4]), key_version=str(factor[5]),
+            ),
+            user_id=principal.user_id, factor_id=factor_id,
+            key_provider=_operator_totp_key_provider(request),
+        )
+        accepted_step = verify_totp(secret, code)
+    except Exception:
+        raise HTTPException(status_code=503, detail="TOTP verification service is unavailable") from None
+    if accepted_step is None:
+        raise HTTPException(status_code=401, detail="TOTP code is invalid")
+    with connection.transaction():
+        activated = activate_operator_totp_factor(
+            connection, factor_id=factor_id, user_id=principal.user_id,
+            accepted_step=accepted_step,
+        )
+        if not activated:
+            raise HTTPException(status_code=409, detail="TOTP enrollment has expired or changed")
+        insert_operator_audit_event(
+            connection, tenant_id=principal.tenant_id, actor_user_id=principal.user_id,
+            actor_kind="operator", action="auth.totp.enrollment.succeeded",
+            remote_ip=_operator_client_ip(request), metadata={"method": "totp"},
+        )
+    return {"status": "active", "method": "totp"}
 
 
 @app.post("/operator/webauthn/register/options")
