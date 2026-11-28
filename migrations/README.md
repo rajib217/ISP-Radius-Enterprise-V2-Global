@@ -44,6 +44,12 @@ The tenant-scoped outbox, fenced worker leases, retry policy and RFC 5176 UDP tr
 - `operator_audit_events` is append-only at the database trigger level. Never put passwords, raw tokens, cookies, RADIUS secrets or payment credentials in metadata.
 - The application implements `/operator/login`, `/operator/session` and `/operator/logout`, opaque HttpOnly cookie sessions, CSRF double-submit validation, origin allowlisting, login throttling, server-side session revocation and role-to-permission mapping. Full permission enforcement on monitoring/BFF routes, MFA, recovery flows and the browser BFF are still pending.
 
-## Operator login throttling (migration 0014)\n\n- Failed attempts are counted by SHA-256 hashes of the normalized email/IP pair and remote IP, never by storing the raw email/IP in the throttle table.\n- Five failures in a rolling 15-minute window lock the matching email and IP scopes for 15 minutes. Successful authentication clears both scopes.\n- This is a baseline distributed throttle. Deployments behind reverse proxies must configure trusted proxy handling so the remote IP represents the actual client, not an untrusted forwarded header.\n\n## Important scope
+## Operator login throttling (migration 0014)
+
+- Failed attempts are counted by SHA-256 hashes of the normalized email/IP pair and remote IP, never by storing the raw email/IP in the throttle table.
+- Five failures in a rolling 15-minute window lock the matching email and IP scopes for 15 minutes. Successful authentication clears both scopes.
+- This is a baseline distributed throttle. Deployments behind reverse proxies must configure trusted proxy handling so the remote IP represents the actual client, not an untrusted forwarded header.
+
+## Important scope
 
 This is a foundational schema, not a complete billing or statutory accounting implementation. It does not yet include invoices, payment allocation, taxes, fiscal-period close, a production RADIUS listener, or a migration runner. Validate SQL, locking behavior, concurrent event ingestion, and privilege boundaries against the exact PostgreSQL version in staging before production use.
