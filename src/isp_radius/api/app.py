@@ -43,6 +43,7 @@ from isp_radius.persistence.operator_repository import (
     record_operator_mfa_challenge_failure,
     resolve_operator_session,
     revoke_operator_session,
+    update_operator_webauthn_credential_after_assertion,
 )
 from isp_radius.persistence.session_monitoring_repository import (
     get_subscriber_session_summary,
