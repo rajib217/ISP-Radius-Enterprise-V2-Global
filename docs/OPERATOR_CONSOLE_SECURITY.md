@@ -1,7 +1,7 @@
 # Operator Console Security Boundary
 
 ## Status
-This document defines the required boundary before any browser-based operator console can consume subscriber monitoring data. The current `/monitoring/*` bearer-token mechanism is intended for trusted service-to-service use. It is not a substitute for human operator login, user sessions, tenant membership, or role-based authorization.
+Initial operator authentication is implemented at `/operator/login`, `/operator/session` and `/operator/logout`. It verifies Argon2id credentials, resolves active tenant memberships, requires tenant selection for multi-tenant users, issues opaque HttpOnly session cookies, validates CSRF and Origin on logout, throttles login failures, and writes audit events. The `/monitoring/*` bearer-token mechanism remains service-to-service only. The browser BFF and per-route permission enforcement are not yet implemented.
 
 ## Required request path
 
@@ -50,13 +50,21 @@ The initial dashboard is read-only:
 
 ## Delivery gates
 Before browser release:
-- Identity, tenant membership, RBAC and audit schema/service are implemented and migrated.
-- Automated tests prove unauthenticated and unauthorized requests are rejected before database access.
+- Identity, tenant membership, login/session lifecycle, CSRF/origin checks, login throttling, role mapping and audit storage are implemented and migrated.
+- Automated tests prove login, tenant selection, session lookup, CSRF rejection and logout revocation. BFF-specific unauthenticated, unauthorized and cross-tenant tests remain required.
 - Cross-tenant access tests cover every BFF route and repository query.
 - Browser bundles and source maps are scanned to confirm no service secrets are present.
-- CSRF, session expiry/revocation, login throttling and security headers are tested.
+- CSRF, 30-minute idle expiry, 12-hour absolute expiry, revocation and login throttling are tested. Security headers and MFA remain outstanding.
 - UI includes loading, empty, stale-data, API-error and permission-denied states.
 - A security review and deployment runbook are completed.
+
+## Current API configuration
+
+- `OPERATOR_ALLOWED_ORIGINS`: comma-separated exact browser origins. Required for login/logout; missing configuration fails closed.
+- `OPERATOR_COOKIE_SECURE`: defaults to `true`. Setting it to `false` is permitted only when `APP_ENV` is `development` or `test`.
+- Session lifetime: 12-hour absolute expiry and 30-minute idle timeout.
+- Login throttling: five failures per email/IP pair or IP in a 15-minute window trigger a 15-minute lock.
+- Apply migrations through `0014_operator_login_throttling.sql` before enabling operator login.
 
 ## Explicit non-goals for the first release
 No browser-stored service bearer token, no tenant selection by arbitrary request parameter, no write operations, no claim that a stale session is offline, and no automatic cleanup or billing based on monitoring state.

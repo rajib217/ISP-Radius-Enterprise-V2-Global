@@ -230,8 +230,8 @@ async def operator_login(
             raise HTTPException(status_code=400, detail="Invalid tenant selection") from None
 
     remote_ip = _operator_client_ip(request)
-    email_hash = hash_token(email)
     ip_hash = hash_token(remote_ip)
+    email_hash = hash_token(f"{email}:{ip_hash}")
     login_error: tuple[int, object] | None = None
     session_data: tuple[object, ...] | None = None
 
@@ -239,6 +239,11 @@ async def operator_login(
         if operator_login_rate_limited(
             connection, email_hash=email_hash, ip_hash=ip_hash
         ):
+            insert_operator_audit_event(
+                connection, tenant_id=None, actor_user_id=None, actor_kind="system",
+                action="auth.login.rate_limited", remote_ip=remote_ip,
+                metadata={"scope": "rate_limit"},
+            )
             login_error = (429, "Too many login attempts. Try again later.")
         else:
             rows = find_operator_memberships(connection, email=email)
@@ -246,6 +251,11 @@ async def operator_login(
                 burn_operator_password_verification(password)
                 record_operator_login_failure(
                     connection, email_hash=email_hash, ip_hash=ip_hash
+                )
+                insert_operator_audit_event(
+                    connection, tenant_id=None, actor_user_id=None, actor_kind="system",
+                    action="auth.login.failed", remote_ip=remote_ip,
+                    metadata={"reason": "invalid_credentials"},
                 )
                 login_error = (401, "Invalid email or password")
             else:
@@ -258,6 +268,11 @@ async def operator_login(
                 if not valid_password or user_status != "active" or not active_memberships:
                     record_operator_login_failure(
                         connection, email_hash=email_hash, ip_hash=ip_hash
+                    )
+                    insert_operator_audit_event(
+                        connection, tenant_id=None, actor_user_id=None, actor_kind="system",
+                        action="auth.login.failed", remote_ip=remote_ip,
+                        metadata={"reason": "invalid_credentials"},
                     )
                     login_error = (401, "Invalid email or password")
                 else:
