@@ -200,3 +200,69 @@ def test_active_webauthn_credential_ids_are_scoped_to_user():
     assert "status = 'active'" in cursor.query
     assert cursor.params == ("user-id",)
     assert cursor.closed
+
+
+
+def test_login_mfa_challenge_is_bound_to_tenant():
+    from isp_radius.persistence.operator_repository import create_operator_login_mfa_challenge
+
+    cursor = FakeCursor()
+    challenge_id = create_operator_login_mfa_challenge(
+        FakeConnection(cursor), user_id="user-id", tenant_id="tenant-id",
+        challenge_hash="e" * 64, origin="https://console.example.com",
+        rp_id="example.com", expires_at="expires",
+    )
+    assert challenge_id
+    assert "tenant_id" in cursor.query
+    assert "'webauthn'" in cursor.query
+    assert cursor.params == (
+        challenge_id, "user-id", "tenant-id", "e" * 64,
+        "https://console.example.com", "example.com", "expires",
+    )
+
+
+def test_pending_login_challenge_returns_server_bound_tenant():
+    from isp_radius.persistence.operator_repository import (
+        find_pending_operator_login_mfa_challenge,
+    )
+
+    cursor = FakeCursor(row=("challenge-id", "user-id", "tenant-id"))
+    result = find_pending_operator_login_mfa_challenge(
+        FakeConnection(cursor), challenge_hash="f" * 64,
+        origin="https://console.example.com", rp_id="example.com",
+    )
+    assert result == ("challenge-id", "user-id", "tenant-id")
+    assert "tenant_id IS NOT NULL" in cursor.query
+    assert "method = 'webauthn'" in cursor.query
+    assert "consumed_at IS NULL" in cursor.query
+    assert "failed_attempts < 5" in cursor.query
+
+
+def test_login_challenge_consumption_returns_identity_and_tenant_atomically():
+    from isp_radius.persistence.operator_repository import (
+        consume_operator_login_mfa_challenge,
+    )
+
+    cursor = FakeCursor(row=("challenge-id", "user-id", "tenant-id"))
+    result = consume_operator_login_mfa_challenge(
+        FakeConnection(cursor), challenge_hash="1" * 64,
+        origin="https://console.example.com", rp_id="example.com",
+    )
+    assert result == ("challenge-id", "user-id", "tenant-id")
+    assert "SET consumed_at = now()" in cursor.query
+    assert "tenant_id IS NOT NULL" in cursor.query
+    assert "expires_at > now()" in cursor.query
+    assert cursor.params == ("1" * 64, "https://console.example.com", "example.com")
+
+
+def test_operator_membership_is_revalidated_after_mfa():
+    from isp_radius.persistence.operator_repository import find_operator_tenant_membership
+
+    cursor = FakeCursor(row=("operator@example.com", "admin"))
+    result = find_operator_tenant_membership(
+        FakeConnection(cursor), user_id="user-id", tenant_id="tenant-id",
+    )
+    assert result == ("operator@example.com", "admin")
+    assert "u.status = 'active'" in cursor.query
+    assert "m.status = 'active'" in cursor.query
+    assert cursor.params == ("user-id", "tenant-id")
