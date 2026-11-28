@@ -241,8 +241,18 @@ def test_security_headers_are_present_and_hsts_requires_https(monkeypatch):
 
 
 def test_operator_responses_are_not_cacheable(monkeypatch):
+    connection = FakeConnection()
+
+    def override_connection():
+        yield connection
+
+    app.dependency_overrides[_database_connection] = override_connection
     client = TestClient(app)
-    response = client.get("/operator/session")
+    try:
+        response = client.get("/operator/session")
+    finally:
+        app.dependency_overrides.clear()
+
     assert response.status_code == 401
     assert response.headers["cache-control"] == "no-store"
 
