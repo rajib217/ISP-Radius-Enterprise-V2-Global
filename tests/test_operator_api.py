@@ -417,6 +417,10 @@ def test_operator_login_with_registered_passkey_returns_challenge_without_sessio
         lambda *_a, **_k: (b"registered-credential",),
     )
     monkeypatch.setattr(
+        "isp_radius.api.app.find_active_operator_totp_factor",
+        lambda *_a, **_k: ("factor-id", user_id, b"cipher", b"n" * 12, b"wrapped", "kms-key"),
+    )
+    monkeypatch.setattr(
         "isp_radius.api.app.generate_authentication_options_json",
         lambda **kwargs: json.dumps({
             "challenge": base64.urlsafe_b64encode(kwargs["challenge"]).rstrip(b"=").decode("ascii"),
@@ -446,7 +450,9 @@ def test_operator_login_with_registered_passkey_returns_challenge_without_sessio
     assert response.json()["mfa_required"] is True
     assert response.json()["method"] == "webauthn"
     assert response.json()["publicKey"]["rpId"] == "testserver"
+    assert response.json()["totp_fallback"]["method"] == "totp"
     assert persisted[0]["tenant_id"] == tenant_id
+    assert persisted[1]["method"] == "totp"
     assert created_sessions == []
     assert response.headers.get_list("set-cookie") == []
 
