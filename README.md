@@ -4,7 +4,7 @@ Vendor-neutral AAA and ISP network operations platform. This is a separate V2 co
 
 **Status:** early implementation. Includes normalized and idempotent RADIUS accounting ingestion, transactional PostgreSQL session projection and usage metering, Argon2id subscriber authentication, a private REST API, interactive Argon2id password provisioning, explicit RADIUS reply profiles, and FreeRADIUS 3.2 PAP authentication, authorization and accounting templates. A tenant-scoped CoA/Disconnect outbox, RFC 5176 UDP transport, leased retry worker, and read-only tenant-scoped session monitoring API are implemented. Monitoring API access currently uses configured SHA-256 bearer-token hashes with the `sessions:read` permission. This is service-level API-key authentication, not a complete human operator identity, login, session, or role-management system.
 
-**Not production-ready:** CHAP/MS-CHAP/EAP, API rate limiting, production operator identity and RBAC, browser-safe operator-console authentication, full HA, load testing, target-distribution FreeRADIUS validation, and live NAS interoperability remain incomplete. The operator dashboard must not embed monitoring API keys in browser code. Build the operator identity/session/RBAC and server-side API boundary before exposing monitoring data in a browser console. Production validation and security review are required before deployment.
+**Not production-ready:** CHAP/MS-CHAP/EAP, API rate limiting, production operator login/session enforcement, RBAC enforcement, browser-safe operator-console authentication, full HA, load testing, target-distribution FreeRADIUS validation, and live NAS interoperability remain incomplete. The operator dashboard must not embed monitoring API keys in browser code. Build the operator identity/session/RBAC and server-side API boundary before exposing monitoring data in a browser console. Production validation and security review are required before deployment.
 
 ## Product goals
 - RADIUS AAA: authentication, authorization, accounting, session lifecycle, CoA and disconnect.
@@ -40,7 +40,7 @@ Vendor-neutral AAA and ISP network operations platform. This is a separate V2 co
 - `tests/`: automated tests
 - `pyproject.toml`: Python package and test configuration
 
-See [Architecture](docs/ARCHITECTURE.md), [Product scope](docs/PRODUCT_SCOPE.md), [Roadmap](docs/ROADMAP.md), [V1 audit](docs/V1_AUDIT.md), [operator console security](docs/OPERATOR_CONSOLE_SECURITY.md), and [database migration notes](migrations/README.md).
+Operator identity storage (migration 0013) is now present; login/session enforcement and RBAC remain pending. See [Operator Console Security](docs/OPERATOR_CONSOLE_SECURITY.md) for the required security boundary.\n\nSee [Architecture](docs/ARCHITECTURE.md), [Product scope](docs/PRODUCT_SCOPE.md), [Roadmap](docs/ROADMAP.md), [V1 audit](docs/V1_AUDIT.md), [operator console security](docs/OPERATOR_CONSOLE_SECURITY.md), and [database migration notes](migrations/README.md).
 
 ## Development
 Requires Python 3.12+.

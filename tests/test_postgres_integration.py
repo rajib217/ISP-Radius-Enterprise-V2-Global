@@ -48,6 +48,65 @@ def test_all_migrations_and_accounting_session_lifecycle():
             """,
             (tenant_id, "Integration Tenant", f"it-{tenant_id[:8]}"),
         )
+
+        # Operator identity, tenant membership, opaque sessions and immutable audit.
+        operator_id = str(uuid4())
+        membership_session_id = str(uuid4())
+        connection.execute(
+            """
+            INSERT INTO operator_users (id, email, password_hash)
+            VALUES (%s, 'operator@example.test', %s)
+            """,
+            (operator_id, hash_subscriber_password("operator-test-password")),
+        )
+        connection.execute(
+            """
+            INSERT INTO operator_tenant_memberships (tenant_id, user_id, role)
+            VALUES (%s, %s, 'viewer')
+            """,
+            (tenant_id, operator_id),
+        )
+        connection.execute(
+            """
+            INSERT INTO operator_sessions (
+                id, tenant_id, user_id, token_hash, csrf_token_hash, expires_at
+            ) VALUES (%s, %s, %s, %s, %s, now() + interval '1 hour')
+            """,
+            (
+                membership_session_id, tenant_id, operator_id,
+                "a" * 64, "b" * 64,
+            ),
+        )
+        audit_id = str(uuid4())
+        connection.execute(
+            """
+            INSERT INTO operator_audit_events (
+                id, tenant_id, actor_user_id, actor_kind, action, metadata
+            ) VALUES (%s, %s, %s, 'operator', 'auth.session.created', '{"source":"integration"}')
+            """,
+            (audit_id, tenant_id, operator_id),
+        )
+        with connection.transaction():
+            with pytest.raises(psycopg.errors.RaiseException):
+                connection.execute(
+                    "UPDATE operator_audit_events SET action = 'tampered' WHERE id = %s",
+                    (audit_id,),
+                )
+        with connection.transaction():
+            with pytest.raises(psycopg.errors.RaiseException):
+                connection.execute(
+                    "DELETE FROM operator_audit_events WHERE id = %s",
+                    (audit_id,),
+                )
+        with connection.transaction():
+            with pytest.raises(psycopg.errors.UniqueViolation):
+                connection.execute(
+                    """
+                    INSERT INTO operator_users (id, email, password_hash)
+                    VALUES (%s, 'operator@example.test', %s)
+                    """,
+                    (str(uuid4()), hash_subscriber_password("duplicate-email")),
+                )
         from isp_radius.aaa.authentication import (
             authenticate_subscriber,
             hash_subscriber_password,
