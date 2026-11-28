@@ -309,6 +309,7 @@ def test_webauthn_registration_options_require_password_reauth_and_return_browse
     client, _ = _client(monkeypatch, [])
     app.dependency_overrides[_operator_principal_dependency] = lambda: principal
     monkeypatch.setenv("OPERATOR_ALLOWED_ORIGINS", "http://localhost")
+    monkeypatch.setenv("OPERATOR_ALLOWED_ORIGINS", "http://localhost")
     monkeypatch.setenv("OPERATOR_WEBAUTHN_RP_ID", "localhost")
     monkeypatch.setattr("isp_radius.api.app.find_operator_password_hash", lambda *_a, **_k: ("hashed", "active"))
     monkeypatch.setattr("isp_radius.api.app.verify_operator_password", lambda *_a, **_k: True)
@@ -356,6 +357,7 @@ def test_webauthn_registration_verification_consumes_challenge_and_persists_publ
     )
     client, _ = _client(monkeypatch, [])
     app.dependency_overrides[_operator_principal_dependency] = lambda: principal
+    monkeypatch.setenv("OPERATOR_ALLOWED_ORIGINS", "http://localhost")
     monkeypatch.setenv("OPERATOR_WEBAUTHN_RP_ID", "localhost")
     monkeypatch.setattr(
         "isp_radius.api.app.find_pending_operator_mfa_challenge",
