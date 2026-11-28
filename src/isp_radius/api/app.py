@@ -223,7 +223,7 @@ def require_operator_permission(permission: str):
         raise ValueError("permission must use the resource:action format")
 
     def dependency(
-        principal: OperatorPrincipal = Depends(_operator_principal_dependency),
+        principal: OperatorPrincipal = _operator_principal_dependency_injected,
     ) -> OperatorPrincipal:
         if not principal.allows(permission):
             raise HTTPException(status_code=403, detail="Operator permission denied")
