@@ -758,9 +758,11 @@ def create_operator_factor_reset_request(
                SELECT %s, %s, %s, %s, %s, %s
                 WHERE EXISTS (SELECT 1 FROM operator_tenant_memberships
                     WHERE tenant_id = %s AND user_id = %s AND status = 'active')
+                  AND (SELECT count(*) FROM operator_tenant_memberships
+                    WHERE user_id = %s AND status = 'active') = 1
                ON CONFLICT DO NOTHING""",
             (request_id, tenant_id, target_user_id, requester_user_id,
-             reason.strip(), expires_at, tenant_id, target_user_id),
+             reason.strip(), expires_at, tenant_id, target_user_id, target_user_id),
         )
         return cursor.rowcount == 1
     finally:
