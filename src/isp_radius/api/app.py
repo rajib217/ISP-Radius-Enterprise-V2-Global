@@ -65,14 +65,16 @@ from isp_radius.security.operator_auth import (
     permissions_for_role,
     verify_operator_password,
 )
-from isp_radius.security.webauthn import (
-    WebAuthnVerificationError,
+from isp_radius.security.operator_mfa import (
+    EncryptedTOTPSecret,
     decrypt_totp_secret,
     encrypt_totp_secret,
     generate_totp_secret,
     totp_provisioning_uri,
     verify_totp,
-    EncryptedTOTPSecret,
+)
+from isp_radius.security.webauthn import (
+    WebAuthnVerificationError,
     generate_authentication_options_json,
     generate_registration_options_json,
     generate_webauthn_challenge,
