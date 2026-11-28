@@ -200,7 +200,7 @@ def generate_recovery_codes(*, count: int = 10) -> tuple[str, ...]:
 def normalize_recovery_code(code: str) -> str:
     """Normalize a code while rejecting all characters outside its alphabet."""
     if not isinstance(code, str):
-        raise TypeError("recovery code must be a string")
+        raise TypeError("invalid recovery code type")
     value = code.replace("-", "").replace(" ", "").upper()
     if len(value) != 36 or any(ch not in "0123456789ABCDEF" for ch in value):
         raise ValueError("invalid recovery code")
