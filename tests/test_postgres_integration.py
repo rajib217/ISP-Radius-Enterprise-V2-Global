@@ -88,20 +88,17 @@ def test_all_migrations_and_accounting_session_lifecycle():
             """,
             (audit_id, tenant_id, operator_id),
         )
-        with pytest.raises(psycopg.errors.RaiseException):
-            with connection.transaction():
+        with pytest.raises(psycopg.errors.RaiseException), connection.transaction():
                 connection.execute(
                     "UPDATE operator_audit_events SET action = 'tampered' WHERE id = %s",
                     (audit_id,),
                 )
-        with pytest.raises(psycopg.errors.RaiseException):
-            with connection.transaction():
+        with pytest.raises(psycopg.errors.RaiseException), connection.transaction():
                 connection.execute(
                     "DELETE FROM operator_audit_events WHERE id = %s",
                     (audit_id,),
                 )
-        with pytest.raises(psycopg.errors.UniqueViolation):
-            with connection.transaction():
+        with pytest.raises(psycopg.errors.UniqueViolation), connection.transaction():
                 connection.execute(
                     """
                     INSERT INTO operator_users (id, email, password_hash)
