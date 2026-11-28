@@ -30,6 +30,7 @@ def _client(monkeypatch, rows):
     monkeypatch.setattr("isp_radius.api.app.insert_operator_audit_event", lambda *_a, **_k: "audit-id")
     monkeypatch.setattr("isp_radius.api.app.create_operator_session", lambda *_a, **_k: "session-id")
     monkeypatch.setattr("isp_radius.api.app.list_active_operator_webauthn_credential_ids", lambda *_a, **_k: ())
+    monkeypatch.setattr("isp_radius.api.app.find_active_operator_totp_factor", lambda *_a, **_k: None)
     return TestClient(app), connection
 
 
@@ -493,6 +494,94 @@ def test_operator_login_webauthn_verify_issues_session_only_after_assertion(monk
                 "challenge": encoded_challenge,
                 "credential": {"id": encoded_credential, "rawId": encoded_credential, "response": {}},
             },
+        )
+    finally:
+        app.dependency_overrides.clear()
+
+    assert response.status_code == 200
+    assert response.json()["operator"]["tenant_id"] == tenant_id
+    cookies = response.headers.get_list("set-cookie")
+    assert any(value.startswith("operator_session=") and "httponly" in value.lower() for value in cookies)
+    assert any(value.startswith("operator_csrf=") for value in cookies)
+
+
+def test_operator_login_with_totp_factor_returns_challenge_without_session(monkeypatch):
+    import base64
+
+    user_id, tenant_id = str(uuid4()), str(uuid4())
+    password_hash = PasswordHasher(time_cost=1, memory_cost=8192, parallelism=1).hash("correct-password")
+    client, _ = _client(
+        monkeypatch,
+        [(user_id, "operator@example.com", password_hash, "active", tenant_id, "viewer", "active")],
+    )
+    monkeypatch.setenv("OPERATOR_WEBAUTHN_RP_ID", "testserver")
+    monkeypatch.setattr(
+        "isp_radius.api.app.find_active_operator_totp_factor",
+        lambda *_a, **_k: ("factor-id", user_id, b"cipher", b"n" * 12, b"wrapped", "kms-key"),
+    )
+    challenges = []
+    monkeypatch.setattr(
+        "isp_radius.api.app.create_operator_login_mfa_challenge",
+        lambda *_a, **kwargs: challenges.append(kwargs) or "challenge-id",
+    )
+    sessions = []
+    monkeypatch.setattr(
+        "isp_radius.api.app.create_operator_session",
+        lambda *_a, **_k: sessions.append(True) or "session-id",
+    )
+    try:
+        response = client.post(
+            "/operator/login",
+            headers={"Origin": "http://testserver"},
+            json={"email": "operator@example.com", "password": "correct-password"},
+        )
+    finally:
+        app.dependency_overrides.clear()
+
+    assert response.status_code == 200
+    assert response.json()["mfa_required"] is True
+    assert response.json()["method"] == "totp"
+    assert len(base64.urlsafe_b64decode(response.json()["challenge"] + "==")) == 32
+    assert challenges[0]["method"] == "totp"
+    assert challenges[0]["tenant_id"] == tenant_id
+    assert sessions == []
+    assert response.headers.get_list("set-cookie") == []
+
+
+def test_operator_totp_login_issues_session_after_replay_safe_verification(monkeypatch):
+    import base64
+
+    user_id, tenant_id = str(uuid4()), str(uuid4())
+    client, _ = _client(monkeypatch, [])
+    monkeypatch.setenv("OPERATOR_WEBAUTHN_RP_ID", "testserver")
+    challenge = b"t" * 32
+    encoded = base64.urlsafe_b64encode(challenge).rstrip(b"=").decode("ascii")
+    factor = ("factor-id", user_id, b"cipher", b"n" * 12, b"wrapped", "kms-key")
+    monkeypatch.setattr(
+        "isp_radius.api.app.find_pending_operator_login_mfa_challenge",
+        lambda *_a, **_k: ("challenge-id", user_id, tenant_id),
+    )
+    monkeypatch.setattr(
+        "isp_radius.api.app.find_active_operator_totp_factor",
+        lambda *_a, **_k: factor,
+    )
+    monkeypatch.setattr("isp_radius.api.app.decrypt_totp_secret", lambda *_a, **_k: "SECRET")
+    monkeypatch.setattr("isp_radius.api.app.verify_totp", lambda *_a, **_k: 1234)
+    monkeypatch.setattr("isp_radius.api.app._operator_totp_key_provider", lambda *_a: object())
+    monkeypatch.setattr("isp_radius.api.app.accept_operator_totp_step", lambda *_a, **_k: True)
+    monkeypatch.setattr(
+        "isp_radius.api.app.consume_operator_login_mfa_challenge",
+        lambda *_a, **_k: ("challenge-id", user_id, tenant_id),
+    )
+    monkeypatch.setattr(
+        "isp_radius.api.app.find_operator_tenant_membership",
+        lambda *_a, **_k: ("operator@example.com", "viewer"),
+    )
+    try:
+        response = client.post(
+            "/operator/login/totp/verify",
+            headers={"Origin": "http://testserver"},
+            json={"challenge": encoded, "code": "123456"},
         )
     finally:
         app.dependency_overrides.clear()
