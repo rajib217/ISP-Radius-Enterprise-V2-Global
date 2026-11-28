@@ -83,8 +83,12 @@ def test_radius_rest_endpoint_rejects_invalid_password():
     assert response.status_code == 401
 
 
-def test_monitoring_endpoint_requires_bearer_token():
+def test_monitoring_endpoint_requires_bearer_token_before_database_access():
+    database_dependency_called = False
+
     def override_connection():
+        nonlocal database_dependency_called
+        database_dependency_called = True
         yield object()
 
     app.dependency_overrides[_database_connection] = override_connection
@@ -92,7 +96,9 @@ def test_monitoring_endpoint_requires_bearer_token():
         response = TestClient(app).get("/monitoring/sessions")
     finally:
         app.dependency_overrides.clear()
+
     assert response.status_code == 401
+    assert database_dependency_called is False
 
 
 def test_monitoring_endpoint_scopes_queries_to_api_key_tenant(monkeypatch):
@@ -153,7 +159,11 @@ def test_monitoring_endpoint_rejects_missing_read_permission(monkeypatch):
             }
         }),
     )
+    database_dependency_called = False
+
     def override_connection():
+        nonlocal database_dependency_called
+        database_dependency_called = True
         yield object()
 
     app.dependency_overrides[_database_connection] = override_connection
@@ -163,4 +173,53 @@ def test_monitoring_endpoint_rejects_missing_read_permission(monkeypatch):
         )
     finally:
         app.dependency_overrides.clear()
+
     assert response.status_code == 403
+    assert database_dependency_called is False
+
+
+
+def test_monitoring_summary_uses_authenticated_tenant_and_stale_threshold(monkeypatch):
+    import hashlib
+    import json
+
+    tenant_id = str(uuid4())
+    token = "summary-monitoring-token"
+    monkeypatch.setenv(
+        "MONITORING_API_KEY_HASHES",
+        json.dumps({
+            hashlib.sha256(token.encode()).hexdigest(): {
+                "tenant_id": tenant_id, "permissions": ["sessions:read"]
+            }
+        }),
+    )
+    observed = {}
+
+    def fake_summary(connection, *, tenant_id, stale_after_seconds):
+        observed["connection"] = connection
+        observed["tenant_id"] = tenant_id
+        observed["stale_after_seconds"] = stale_after_seconds
+        return {"online": 3, "stale": 1, "offline": 2}
+
+    monkeypatch.setattr("isp_radius.api.app.get_subscriber_session_summary", fake_summary)
+    connection = object()
+
+    def override_connection():
+        yield connection
+
+    app.dependency_overrides[_database_connection] = override_connection
+    try:
+        response = TestClient(app).get(
+            "/monitoring/sessions/summary?stale_after_seconds=600",
+            headers={"Authorization": f"Bearer {token}"},
+        )
+    finally:
+        app.dependency_overrides.clear()
+
+    assert response.status_code == 200
+    assert response.json() == {"online": 3, "stale": 1, "offline": 2}
+    assert observed == {
+        "connection": connection,
+        "tenant_id": tenant_id,
+        "stale_after_seconds": 600,
+    }

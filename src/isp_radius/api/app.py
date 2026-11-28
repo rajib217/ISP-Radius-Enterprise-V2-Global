@@ -113,6 +113,13 @@ def _monitoring_principal(authorization: str | None) -> str:
 
 
 
+def _monitoring_tenant_dependency(
+    authorization: str | None = Header(default=None),
+) -> str:
+    """Authenticate monitoring requests before acquiring a database connection."""
+    return _monitoring_principal(authorization)
+
+
 @app.get("/health/live")
 def live() -> dict[str, str]:
     return {"status": "ok"}
@@ -260,7 +267,7 @@ async def radius_accounting(
 
 @app.get("/monitoring/sessions")
 def monitoring_sessions(
-    authorization: str | None = Header(default=None),
+    tenant_id: str = Depends(_monitoring_tenant_dependency),
     state: str | None = Query(default=None),
     search: str | None = Query(default=None, max_length=128),
     nas_identifier: str | None = Query(default=None, max_length=253),
@@ -270,7 +277,6 @@ def monitoring_sessions(
     connection: psycopg.Connection = _database_dependency,
 ) -> dict[str, object]:
     """List sessions for the authenticated tenant."""
-    tenant_id = _monitoring_principal(authorization)
     try:
         items = list_subscriber_sessions(
             connection, tenant_id=tenant_id, state=state, search=search,
@@ -284,12 +290,11 @@ def monitoring_sessions(
 
 @app.get("/monitoring/sessions/summary")
 def monitoring_session_summary(
-    authorization: str | None = Header(default=None),
+    tenant_id: str = Depends(_monitoring_tenant_dependency),
     stale_after_seconds: int = Query(default=300, ge=30, le=86400),
     connection: psycopg.Connection = _database_dependency,
 ) -> dict[str, int]:
     """Return tenant-scoped session counts and usage counters."""
-    tenant_id = _monitoring_principal(authorization)
     try:
         return get_subscriber_session_summary(
             connection, tenant_id=tenant_id, stale_after_seconds=stale_after_seconds,
