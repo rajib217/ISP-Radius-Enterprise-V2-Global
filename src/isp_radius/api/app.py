@@ -1206,8 +1206,17 @@ async def operator_mfa_reset_approve(
         raise HTTPException(status_code=403, detail="Owner or admin role required")
     try:
         normalized = str(UUID(request_id))
-    except (ValueError, TypeError):
-        raise HTTPException(status_code=400, detail="Invalid reset request ID") from None
+        payload = await request.json()
+    except (ValueError, TypeError, AttributeError):
+        raise HTTPException(status_code=400, detail="Invalid reset approval request") from None
+    password = payload.get("password") if isinstance(payload, dict) else None
+    password_row = find_operator_password_hash(connection, user_id=principal.user_id)
+    if (
+        not isinstance(password, str) or not password or len(password) > 1024
+        or password_row is None or password_row[1] != "active"
+        or not verify_operator_password(password_row[0], password)
+    ):
+        raise HTTPException(status_code=401, detail="Password re-authentication failed")
     with connection.transaction():
         target = approve_operator_factor_reset(
             connection, request_id=normalized, tenant_id=principal.tenant_id,
