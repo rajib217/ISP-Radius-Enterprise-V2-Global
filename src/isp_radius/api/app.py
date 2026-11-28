@@ -434,7 +434,7 @@ async def operator_login(
                                 # Temporary bootstrap path: accounts without an enrolled factor can enroll.
                                 # Production MFA enforcement remains disabled until bootstrap/recovery is complete.
                                 tokens = issue_session_tokens()
-                                    existing_token = request.cookies.get("operator_session")
+                                existing_token = request.cookies.get("operator_session")
                                 if existing_token:
                                     try:
                                         revoke_operator_session(
