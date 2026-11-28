@@ -51,14 +51,14 @@ A challenge must be bound to the user and login attempt, must not be accepted as
 
 ## Data model requirements before implementation
 
-The migration should introduce separate, tenant-independent user factor records because operator identity is global across tenant memberships:
+Migration 0015 introduces separate, tenant-independent user factor records because operator identity is global across tenant memberships:
 
 - WebAuthn credential: user ID, credential ID (unique), public key, signature counter, transports, AAGUID, created/last-used/revoked timestamps.
 - TOTP factor: user ID, encrypted secret, encryption key version, pending/active/revoked state, enrollment expiry, last accepted time step.
 - MFA challenge: user ID, challenge digest, allowed factor method, origin/RP binding, expiry, consumed timestamp, attempt count.
 - Recovery code: user ID, one-way digest, created/consumed timestamps and batch identifier.
 
-Use foreign keys to `operator_users`, uniqueness constraints for credential IDs and challenge digests, bounded attempt counters, expiry indexes, and transactionally enforced one-time consumption. Factor secrets and recovery material must never be placed in audit metadata.
+Migration 0015 adds foreign keys to operator_users, uniqueness constraints for credential IDs and challenge digests, bounded challenge attempt counters, expiry indexes, TOTP ciphertext storage and recovery-code digest storage. Repository operations provide conditional one-time challenge consumption, TOTP time-step replay protection, recovery-code consumption, and session/challenge revocation after factor reset. Factor secrets and recovery material must never be placed in audit metadata.
 
 Do not add plaintext TOTP secrets, raw challenges, raw recovery codes, or reversible recovery-code storage to PostgreSQL. Do not make MFA enrollment active until the user completes a valid factor challenge.
 
@@ -83,4 +83,4 @@ Do not add plaintext TOTP secrets, raw challenges, raw recovery codes, or revers
 
 ## Current status
 
-This document records the security design only. MFA is **not implemented or enforced yet**. The current operator login remains password-only and must not be treated as production-ready for internet-exposed operator access. The schema and runtime work must follow the delivery order above.
+This document records the security design and initial persistence foundation. Migration 0015 and repository primitives are implemented, but cryptographic WebAuthn/TOTP verification, KMS integration, enrollment/login API integration, recovery approval and PostgreSQL concurrency tests are **not implemented**. MFA is **not enforced**. The current operator login remains password-only and must not be treated as production-ready for internet-exposed operator access.

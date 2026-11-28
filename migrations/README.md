@@ -3,8 +3,8 @@
 ## Baseline
 
 - Target: PostgreSQL 16 or newer.
-- Apply every numbered migration from 0001 through 0014 in filename order.
-- These migrations assume an empty database for the baseline. Migrations 0013 and 0014 are additive and do not rewrite subscriber or financial data.
+- Apply every numbered migration from 0001 through 0015 in filename order.
+- These migrations assume an empty database for the baseline. Migrations 0013 through 0015 are additive and do not rewrite subscriber or financial data.
 - Take and verify a backup before applying migrations to any non-empty environment.
 - Apply each migration once, in filename order, using a database role limited to schema changes.
 - The application role should not own tables or have permission to bypass tenant-scoped service access.
@@ -53,3 +53,13 @@ The tenant-scoped outbox, fenced worker leases, retry policy and RFC 5176 UDP tr
 ## Important scope
 
 This is a foundational schema, not a complete billing or statutory accounting implementation. It does not yet include invoices, payment allocation, taxes, fiscal-period close, a production RADIUS listener, or a migration runner. Validate SQL, locking behavior, concurrent event ingestion, and privilege boundaries against the exact PostgreSQL version in staging before production use.
+
+
+## Operator MFA persistence foundation (migration 0015)
+
+- WebAuthn records store credential IDs, public keys and authenticator metadata only.
+- TOTP records store AES-GCM ciphertext, a 12-byte nonce and an external KMS key version. Do not activate a factor until enrollment verification succeeds. A partial unique index permits one active TOTP factor per user.
+- MFA challenges store only a SHA-256 digest, are bound to method, exact origin and RP ID, and have a database-enforced maximum five-minute lifetime. Conditional updates provide one-time challenge consumption and bounded failures.
+- Recovery codes store only SHA-256 digests and are consumed with a conditional update. Generate high-entropy codes and display them once.
+- Factor reset must revoke all outstanding challenges and active operator sessions in the same database transaction.
+- Migration 0015 adds storage and repository primitives only. It does not change the login flow or enforce MFA. Complete cryptographic verification, KMS integration, recovery approvals and PostgreSQL concurrency tests before enabling MFA.

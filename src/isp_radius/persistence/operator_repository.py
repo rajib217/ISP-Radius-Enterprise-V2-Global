@@ -205,3 +205,141 @@ def clear_operator_login_failures(
         )
     finally:
         cursor.close()
+
+
+
+def create_operator_mfa_challenge(
+    connection: Any, *, user_id: str, challenge_hash: str, method: str,
+    origin: str, rp_id: str, expires_at: Any,
+) -> str:
+    """Persist only a challenge digest; database limits its lifetime to five minutes."""
+    challenge_id = str(uuid4())
+    cursor = _cursor(connection)
+    try:
+        cursor.execute(
+            """
+            INSERT INTO operator_mfa_challenges
+                (id, user_id, challenge_hash, method, origin, rp_id, expires_at)
+            VALUES (%s, %s, %s, %s, %s, %s, %s)
+            """,
+            (challenge_id, user_id, challenge_hash, method, origin, rp_id, expires_at),
+        )
+    finally:
+        cursor.close()
+    return challenge_id
+
+
+def consume_operator_mfa_challenge(
+    connection: Any, *, challenge_hash: str, method: str, origin: str, rp_id: str,
+) -> tuple[Any, ...] | None:
+    """Atomically consume a valid challenge once, bound to method and browser origin."""
+    cursor = _cursor(connection)
+    try:
+        cursor.execute(
+            """
+            UPDATE operator_mfa_challenges
+               SET consumed_at = now()
+             WHERE challenge_hash = %s AND method = %s AND origin = %s AND rp_id = %s
+               AND consumed_at IS NULL AND expires_at > now() AND failed_attempts < 5
+            RETURNING id, user_id
+            """,
+            (challenge_hash, method, origin, rp_id),
+        )
+        return cursor.fetchone()
+    finally:
+        cursor.close()
+
+
+def record_operator_mfa_challenge_failure(connection: Any, *, challenge_hash: str) -> bool:
+    """Increment bounded challenge failures without extending challenge lifetime."""
+    cursor = _cursor(connection)
+    try:
+        cursor.execute(
+            """
+            UPDATE operator_mfa_challenges
+               SET failed_attempts = failed_attempts + 1
+             WHERE challenge_hash = %s AND consumed_at IS NULL
+               AND expires_at > now() AND failed_attempts < 5
+            RETURNING id
+            """,
+            (challenge_hash,),
+        )
+        return cursor.fetchone() is not None
+    finally:
+        cursor.close()
+
+
+def accept_operator_totp_step(
+    connection: Any, *, factor_id: str, user_id: str, time_step: int,
+) -> bool:
+    """Atomically accept a TOTP time step once; reject replayed or older steps."""
+    if time_step < 0:
+        raise ValueError("TOTP time step must be non-negative")
+    cursor = _cursor(connection)
+    try:
+        cursor.execute(
+            """
+            UPDATE operator_totp_factors
+               SET last_accepted_step = %s, last_used_at = now()
+             WHERE id = %s AND user_id = %s AND status = 'active'
+               AND last_accepted_step < %s
+            RETURNING id
+            """,
+            (time_step, factor_id, user_id, time_step),
+        )
+        return cursor.fetchone() is not None
+    finally:
+        cursor.close()
+
+
+def consume_operator_recovery_code(
+    connection: Any, *, user_id: str, code_hash: str,
+) -> str | None:
+    """Consume one recovery digest atomically and return its batch identifier."""
+    cursor = _cursor(connection)
+    try:
+        cursor.execute(
+            """
+            UPDATE operator_mfa_recovery_codes
+               SET consumed_at = now()
+             WHERE user_id = %s AND code_hash = %s AND consumed_at IS NULL
+            RETURNING batch_id
+            """,
+            (user_id, code_hash),
+        )
+        row = cursor.fetchone()
+        return str(row[0]) if row is not None else None
+    finally:
+        cursor.close()
+
+
+def revoke_operator_mfa_challenges(connection: Any, *, user_id: str) -> int:
+    """Invalidate outstanding MFA challenges after a factor reset."""
+    cursor = _cursor(connection)
+    try:
+        cursor.execute(
+            """
+            UPDATE operator_mfa_challenges SET consumed_at = now()
+             WHERE user_id = %s AND consumed_at IS NULL
+            """,
+            (user_id,),
+        )
+        return cursor.rowcount
+    finally:
+        cursor.close()
+
+
+def revoke_operator_sessions_for_user(connection: Any, *, user_id: str) -> int:
+    """Revoke every active browser session after MFA recovery or factor reset."""
+    cursor = _cursor(connection)
+    try:
+        cursor.execute(
+            """
+            UPDATE operator_sessions SET revoked_at = now()
+             WHERE user_id = %s AND revoked_at IS NULL
+            """,
+            (user_id,),
+        )
+        return cursor.rowcount
+    finally:
+        cursor.close()
