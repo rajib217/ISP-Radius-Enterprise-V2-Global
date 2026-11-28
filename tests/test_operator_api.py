@@ -128,3 +128,96 @@ def test_operator_session_and_logout_enforce_csrf_and_revoke(monkeypatch):
     assert bad_logout.status_code == 403
     assert logout.status_code == 204
     assert revoked == [True]
+
+
+def test_operator_monitoring_bff_derives_tenant_and_checks_read_permission(monkeypatch):
+    user_id, tenant_id = str(uuid4()), str(uuid4())
+    csrf = "bff-csrf-token"
+    monkeypatch.setenv("APP_ENV", "test")
+    monkeypatch.setenv("OPERATOR_COOKIE_SECURE", "false")
+    connection = FakeConnection()
+
+    def override_connection():
+        yield connection
+
+    app.dependency_overrides[_database_connection] = override_connection
+    monkeypatch.setattr(
+        "isp_radius.api.app.resolve_operator_session",
+        lambda *_a, **_k: ("session-id", user_id, "viewer@example.com", tenant_id, "viewer", hash_token(csrf)),
+    )
+    observed = {}
+
+    def fake_list(_connection, **kwargs):
+        observed.update(kwargs)
+        return [{"id": "session-1", "state": "online"}]
+
+    monkeypatch.setattr("isp_radius.api.app.list_subscriber_sessions", fake_list)
+    client = TestClient(app)
+    try:
+        client.cookies.set("operator_session", "valid-session-cookie")
+        response = client.get("/operator/monitoring/sessions?state=online&limit=25")
+    finally:
+        app.dependency_overrides.clear()
+
+    assert response.status_code == 200
+    assert response.json()["items"] == [{"id": "session-1", "state": "online"}]
+    assert observed["tenant_id"] == tenant_id
+    assert observed["state"] == "online"
+    assert observed["limit"] == 25
+
+
+def test_operator_monitoring_bff_denies_role_without_sessions_read(monkeypatch):
+    user_id, tenant_id = str(uuid4()), str(uuid4())
+    monkeypatch.setenv("APP_ENV", "test")
+    connection = FakeConnection()
+
+    def override_connection():
+        yield connection
+
+    app.dependency_overrides[_database_connection] = override_connection
+    monkeypatch.setattr(
+        "isp_radius.api.app.resolve_operator_session",
+        lambda *_a, **_k: ("session-id", user_id, "billing@example.com", tenant_id, "billing", hash_token("csrf")),
+    )
+    repository_called = False
+
+    def fake_list(*_a, **_k):
+        nonlocal repository_called
+        repository_called = True
+        return []
+
+    monkeypatch.setattr("isp_radius.api.app.list_subscriber_sessions", fake_list)
+    client = TestClient(app)
+    try:
+        client.cookies.set("operator_session", "valid-session-cookie")
+        response = client.get("/operator/monitoring/sessions")
+    finally:
+        app.dependency_overrides.clear()
+
+    assert response.status_code == 403
+    assert repository_called is False
+
+
+def test_operator_monitoring_bff_rejects_missing_session_before_session_lookup(monkeypatch):
+    connection = FakeConnection()
+
+    def override_connection():
+        yield connection
+
+    app.dependency_overrides[_database_connection] = override_connection
+    lookup_called = False
+
+    def fake_resolve(*_a, **_k):
+        nonlocal lookup_called
+        lookup_called = True
+        return None
+
+    monkeypatch.setattr("isp_radius.api.app.resolve_operator_session", fake_resolve)
+    client = TestClient(app)
+    try:
+        response = client.get("/operator/monitoring/sessions")
+    finally:
+        app.dependency_overrides.clear()
+
+    assert response.status_code == 401
+    assert lookup_called is False

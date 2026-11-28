@@ -416,6 +416,56 @@ def operator_logout(
     return response
 
 
+
+@app.get("/operator/monitoring/sessions")
+def operator_monitoring_sessions(
+    principal: OperatorPrincipal = _operator_principal_dependency_injected,
+    state: str | None = Query(default=None),
+    search: str | None = Query(default=None, max_length=128),
+    nas_identifier: str | None = Query(default=None, max_length=253),
+    stale_after_seconds: int = Query(default=300, ge=30, le=86400),
+    limit: int = Query(default=50, ge=1, le=200),
+    offset: int = Query(default=0, ge=0, le=1_000_000),
+    connection: psycopg.Connection = _database_dependency,
+) -> dict[str, object]:
+    """Browser-safe, read-only monitoring BFF scoped to the operator session."""
+    if not principal.allows("sessions:read"):
+        raise HTTPException(status_code=403, detail="Operator permission denied")
+    try:
+        items = list_subscriber_sessions(
+            connection,
+            tenant_id=principal.tenant_id,
+            state=state,
+            search=search,
+            nas_identifier=nas_identifier,
+            stale_after_seconds=stale_after_seconds,
+            limit=limit,
+            offset=offset,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    return {"items": items, "limit": limit, "offset": offset}
+
+
+@app.get("/operator/monitoring/sessions/summary")
+def operator_monitoring_session_summary(
+    principal: OperatorPrincipal = _operator_principal_dependency_injected,
+    stale_after_seconds: int = Query(default=300, ge=30, le=86400),
+    connection: psycopg.Connection = _database_dependency,
+) -> dict[str, int]:
+    """Return monitoring summary for the tenant bound to the operator session."""
+    if not principal.allows("sessions:read"):
+        raise HTTPException(status_code=403, detail="Operator permission denied")
+    try:
+        return get_subscriber_session_summary(
+            connection,
+            tenant_id=principal.tenant_id,
+            stale_after_seconds=stale_after_seconds,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+
 @app.get("/health/live")
 def live() -> dict[str, str]:
     return {"status": "ok"}
