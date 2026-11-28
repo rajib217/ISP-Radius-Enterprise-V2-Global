@@ -2,13 +2,13 @@
 from __future__ import annotations
 
 import os
-from typing import Any
+from typing import Any, ClassVar
 
 
 class AwsKmsDataKeyProvider:
     """Generate and unwrap AES-256 data keys using an AWS KMS customer key."""
 
-    _ENCRYPTION_CONTEXT = {
+    _ENCRYPTION_CONTEXT: ClassVar[dict[str, str]] = {
         "application": "isp-radius-enterprise",
         "purpose": "operator-totp",
         "schema": "v1",
@@ -21,7 +21,7 @@ class AwsKmsDataKeyProvider:
         self._key_id = key_id
 
     @classmethod
-    def from_environment(cls) -> "AwsKmsDataKeyProvider":
+    def from_environment(cls) -> AwsKmsDataKeyProvider:
         key_id = os.environ.get("OPERATOR_TOTP_KMS_KEY_ID", "").strip()
         if not key_id:
             raise RuntimeError("OPERATOR_TOTP_KMS_KEY_ID is not configured")
@@ -34,11 +34,18 @@ class AwsKmsDataKeyProvider:
         return cls(client, key_id=key_id)
 
     def generate_data_key(self) -> tuple[bytes, bytes, str]:
-        response = self._client.generate_data_key(
-            KeyId=self._key_id,
-            KeySpec="AES_256",
-            EncryptionContext=self._ENCRYPTION_CONTEXT,
-        )
+        try:
+            response = self._client.generate_data_key(
+                KeyId=self._key_id,
+                KeySpec="AES_256",
+                EncryptionContext=self._ENCRYPTION_CONTEXT,
+            )
+        except Exception as exc:
+            from botocore.exceptions import BotoCoreError, ClientError
+
+            if isinstance(exc, (BotoCoreError, ClientError)):
+                raise RuntimeError("AWS KMS data-key generation failed") from exc
+            raise
         plaintext = bytes(response["Plaintext"])
         wrapped = bytes(response["CiphertextBlob"])
         key_version = str(response["KeyId"])
@@ -47,11 +54,18 @@ class AwsKmsDataKeyProvider:
         return plaintext, wrapped, key_version
 
     def decrypt_data_key(self, *, wrapped_key: bytes, key_version: str) -> bytes:
-        response = self._client.decrypt(
-            KeyId=key_version,
-            CiphertextBlob=wrapped_key,
-            EncryptionContext=self._ENCRYPTION_CONTEXT,
-        )
+        try:
+            response = self._client.decrypt(
+                KeyId=key_version,
+                CiphertextBlob=wrapped_key,
+                EncryptionContext=self._ENCRYPTION_CONTEXT,
+            )
+        except Exception as exc:
+            from botocore.exceptions import BotoCoreError, ClientError
+
+            if isinstance(exc, (BotoCoreError, ClientError)):
+                raise RuntimeError("AWS KMS data-key decryption failed") from exc
+            raise
         plaintext = bytes(response["Plaintext"])
         if len(plaintext) != 32:
             raise RuntimeError("AWS KMS returned an invalid AES-256 data key")

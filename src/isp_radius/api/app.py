@@ -779,7 +779,7 @@ async def operator_login_totp_verify(
             key_provider=_operator_totp_key_provider(request),
         )
         accepted_step = verify_totp(secret, code)
-    except Exception:
+    except (ValueError, RuntimeError, ImportError):
         raise HTTPException(status_code=503, detail="TOTP verification service is unavailable") from None
 
     if accepted_step is None:
@@ -893,7 +893,7 @@ async def operator_totp_enroll(
             secret, user_id=principal.user_id, factor_id=factor_id,
             key_provider=_operator_totp_key_provider(request),
         )
-    except Exception:
+    except (ValueError, RuntimeError, ImportError):
         raise HTTPException(status_code=503, detail="TOTP encryption service is unavailable") from None
     with connection.transaction():
         create_operator_totp_factor(
@@ -957,7 +957,7 @@ async def operator_totp_enroll_verify(
             key_provider=_operator_totp_key_provider(request),
         )
         accepted_step = verify_totp(secret, code)
-    except Exception:
+    except (ValueError, RuntimeError, ImportError):
         raise HTTPException(status_code=503, detail="TOTP verification service is unavailable") from None
     if accepted_step is None:
         with connection.transaction():
