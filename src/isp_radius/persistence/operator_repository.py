@@ -437,3 +437,44 @@ def revoke_operator_webauthn_credential(
         return cursor.fetchone() is not None
     finally:
         cursor.close()
+
+
+def find_pending_operator_mfa_challenge(
+    connection: Any, *, challenge_hash: str, method: str, origin: str, rp_id: str,
+) -> tuple[Any, ...] | None:
+    """Find an unconsumed, unexpired challenge without consuming it."""
+    cursor = _cursor(connection)
+    try:
+        cursor.execute(
+            """
+            SELECT id, user_id
+              FROM operator_mfa_challenges
+             WHERE challenge_hash = %s AND method = %s AND origin = %s AND rp_id = %s
+               AND consumed_at IS NULL AND expires_at > now() AND failed_attempts < 5
+             LIMIT 1
+            """,
+            (challenge_hash, method, origin, rp_id),
+        )
+        return cursor.fetchone()
+    finally:
+        cursor.close()
+
+
+def list_active_operator_webauthn_credential_ids(
+    connection: Any, *, user_id: str,
+) -> tuple[bytes, ...]:
+    """Return active credential IDs for exclusion during passkey enrollment."""
+    cursor = _cursor(connection)
+    try:
+        cursor.execute(
+            """
+            SELECT credential_id
+              FROM operator_webauthn_credentials
+             WHERE user_id = %s AND status = 'active'
+             ORDER BY created_at, id
+            """,
+            (user_id,),
+        )
+        return tuple(row[0] for row in cursor.fetchall())
+    finally:
+        cursor.close()

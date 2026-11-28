@@ -160,3 +160,43 @@ def test_webauthn_credential_revocation_is_owner_bound():
     )
     assert "user_id = %s" in cursor.query
     assert "status = 'active'" in cursor.query
+
+
+
+def test_pending_mfa_challenge_lookup_is_bound_and_does_not_consume():
+    from isp_radius.persistence.operator_repository import find_pending_operator_mfa_challenge
+
+    cursor = FakeCursor(row=("challenge-id", "user-id"))
+    result = find_pending_operator_mfa_challenge(
+        FakeConnection(cursor), challenge_hash="d" * 64, method="webauthn",
+        origin="https://console.example.com", rp_id="example.com",
+    )
+    assert result == ("challenge-id", "user-id")
+    assert "consumed_at IS NULL" in cursor.query
+    assert "expires_at > now()" in cursor.query
+    assert "failed_attempts < 5" in cursor.query
+    assert "origin = %s" in cursor.query
+    assert cursor.params == (
+        "d" * 64, "webauthn", "https://console.example.com", "example.com"
+    )
+    assert cursor.closed
+
+
+def test_active_webauthn_credential_ids_are_scoped_to_user():
+    from isp_radius.persistence.operator_repository import (
+        list_active_operator_webauthn_credential_ids,
+    )
+
+    class RowsCursor(FakeCursor):
+        def fetchall(self):
+            return [(b"credential-a",), (b"credential-b",)]
+
+    cursor = RowsCursor()
+    result = list_active_operator_webauthn_credential_ids(
+        FakeConnection(cursor), user_id="user-id"
+    )
+    assert result == (b"credential-a", b"credential-b")
+    assert "user_id = %s" in cursor.query
+    assert "status = 'active'" in cursor.query
+    assert cursor.params == ("user-id",)
+    assert cursor.closed
