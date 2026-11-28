@@ -46,7 +46,9 @@ from isp_radius.persistence.operator_repository import (
     operator_login_rate_limited,
     record_operator_login_failure,
     record_operator_mfa_challenge_failure,
+    record_operator_totp_enrollment_failure,
     resolve_operator_session,
+    revoke_operator_mfa_challenges,
     revoke_operator_session,
     update_operator_webauthn_credential_after_assertion,
 )
@@ -314,6 +316,7 @@ async def operator_login(
     login_error: tuple[int, object] | None = None
     session_data: tuple[object, ...] | None = None
     login_mfa_data: tuple[str, dict[str, object]] | None = None
+    login_totp_fallback: str | None = None
 
     with connection.transaction():
         if operator_login_rate_limited(
@@ -406,6 +409,20 @@ async def operator_login(
                             )
                             encoded_challenge = base64.urlsafe_b64encode(challenge).rstrip(b"=").decode("ascii")
                             login_mfa_data = (encoded_challenge, options)
+                            if find_active_operator_totp_factor(
+                                connection, user_id=str(user_id),
+                            ) is not None:
+                                totp_challenge = generate_webauthn_challenge()
+                                create_operator_login_mfa_challenge(
+                                    connection, user_id=str(user_id), tenant_id=str(membership[4]),
+                                    challenge_hash=hash_webauthn_challenge(totp_challenge),
+                                    origin=origin, rp_id=rp_id,
+                                    expires_at=datetime.now(UTC) + timedelta(minutes=5),
+                                    method="totp",
+                                )
+                                login_totp_fallback = base64.urlsafe_b64encode(
+                                    totp_challenge
+                                ).rstrip(b"=").decode("ascii")
                         else:
                             totp_factor = find_active_operator_totp_factor(
                                 connection, user_id=str(user_id),
@@ -477,7 +494,13 @@ async def operator_login(
         challenge, options = login_mfa_data
         if options.get("method") == "totp":
             return {"mfa_required": True, "method": "totp", "challenge": challenge}
-        return {"mfa_required": True, "method": "webauthn", "challenge": challenge, "publicKey": options}
+        result: dict[str, object] = {
+            "mfa_required": True, "method": "webauthn",
+            "challenge": challenge, "publicKey": options,
+        }
+        if login_totp_fallback is not None:
+            result["totp_fallback"] = {"method": "totp", "challenge": login_totp_fallback}
+        return result
     if session_data is None:
         raise HTTPException(status_code=401, detail="Invalid email or password")
 
@@ -657,6 +680,7 @@ async def operator_login_webauthn_verify(
                     ):
                         login_error = (401, "Passkey credential is no longer active")
                     else:
+                        revoke_operator_mfa_challenges(connection, user_id=str(user_id))
                         membership = find_operator_tenant_membership(
                             connection, user_id=str(user_id), tenant_id=str(tenant_id),
                         )
@@ -792,6 +816,7 @@ async def operator_login_totp_verify(
             if consumed is None:
                 login_error = (409, "TOTP login challenge was already used")
             else:
+                revoke_operator_mfa_challenges(connection, user_id=str(user_id))
                 membership = find_operator_tenant_membership(
                     connection, user_id=str(user_id), tenant_id=str(tenant_id),
                 )
@@ -935,6 +960,15 @@ async def operator_totp_enroll_verify(
     except Exception:
         raise HTTPException(status_code=503, detail="TOTP verification service is unavailable") from None
     if accepted_step is None:
+        with connection.transaction():
+            record_operator_totp_enrollment_failure(
+                connection, factor_id=factor_id, user_id=principal.user_id,
+            )
+            insert_operator_audit_event(
+                connection, tenant_id=principal.tenant_id, actor_user_id=principal.user_id,
+                actor_kind="operator", action="auth.totp.enrollment.failed",
+                remote_ip=_operator_client_ip(request), metadata={"method": "totp"},
+            )
         raise HTTPException(status_code=401, detail="TOTP code is invalid")
     with connection.transaction():
         activated = activate_operator_totp_factor(

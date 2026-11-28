@@ -3,7 +3,7 @@
 ## Baseline
 
 - Target: PostgreSQL 16 or newer.
-- Apply every numbered migration from 0001 through 0015 in filename order.
+- Apply every numbered migration from 0001 through 0018 in filename order.
 - These migrations assume an empty database for the baseline. Migrations 0013 through 0015 are additive and do not rewrite subscriber or financial data.
 - Take and verify a backup before applying migrations to any non-empty environment.
 - Apply each migration once, in filename order, using a database role limited to schema changes.
@@ -78,3 +78,9 @@ Adds an optional tenant reference to MFA challenges. Login challenges must bind
 the selected tenant at password-authentication time so the assertion response
 cannot choose or switch tenant membership. Enrollment challenges leave this
 field NULL. Existing challenges remain valid and are not rewritten.
+
+
+## 0018: TOTP enrollment attempt limits
+
+Adds a bounded failed-verification counter to pending TOTP factors. Five invalid
+codes revoke the pending factor so enrollment cannot be brute-forced indefinitely.

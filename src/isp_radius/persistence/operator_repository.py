@@ -367,6 +367,14 @@ def create_operator_totp_factor(
     try:
         cursor.execute(
             """
+            UPDATE operator_totp_factors
+               SET status = 'revoked', revoked_at = now()
+             WHERE user_id = %s AND status = 'pending'
+            """,
+            (user_id,),
+        )
+        cursor.execute(
+            """
             INSERT INTO operator_totp_factors (
                 id, user_id, secret_ciphertext, nonce, wrapped_data_key,
                 key_version, status, pending_expires_at
@@ -416,6 +424,32 @@ def find_active_operator_totp_factor(
             (user_id,),
         )
         return cursor.fetchone()
+    finally:
+        cursor.close()
+
+
+def record_operator_totp_enrollment_failure(
+    connection: Any, *, factor_id: str, user_id: str,
+) -> int | None:
+    """Bound pending-factor verification attempts and revoke after five failures."""
+    cursor = _cursor(connection)
+    try:
+        cursor.execute(
+            """
+            UPDATE operator_totp_factors
+               SET enrollment_failed_attempts = enrollment_failed_attempts + 1,
+                   status = CASE WHEN enrollment_failed_attempts + 1 >= 5
+                                 THEN 'revoked' ELSE 'pending' END,
+                   revoked_at = CASE WHEN enrollment_failed_attempts + 1 >= 5
+                                     THEN now() ELSE NULL END
+             WHERE id = %s AND user_id = %s AND status = 'pending'
+               AND pending_expires_at > now() AND enrollment_failed_attempts < 5
+            RETURNING enrollment_failed_attempts
+            """,
+            (factor_id, user_id),
+        )
+        row = cursor.fetchone()
+        return int(row[0]) if row is not None else None
     finally:
         cursor.close()
 

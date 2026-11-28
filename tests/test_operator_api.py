@@ -31,6 +31,7 @@ def _client(monkeypatch, rows):
     monkeypatch.setattr("isp_radius.api.app.create_operator_session", lambda *_a, **_k: "session-id")
     monkeypatch.setattr("isp_radius.api.app.list_active_operator_webauthn_credential_ids", lambda *_a, **_k: ())
     monkeypatch.setattr("isp_radius.api.app.find_active_operator_totp_factor", lambda *_a, **_k: None)
+    monkeypatch.setattr("isp_radius.api.app.revoke_operator_mfa_challenges", lambda *_a, **_k: 0)
     return TestClient(app), connection
 
 

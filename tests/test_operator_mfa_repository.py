@@ -309,3 +309,16 @@ def test_login_challenge_can_bind_totp_method():
         rp_id="example.com", expires_at="expires", method="totp",
     )
     assert cursor.params[4] == "totp"
+
+
+def test_totp_enrollment_failures_are_bounded_and_revoke_pending_factor():
+    from isp_radius.persistence.operator_repository import record_operator_totp_enrollment_failure
+
+    cursor = FakeCursor(row=(5,))
+    assert record_operator_totp_enrollment_failure(
+        FakeConnection(cursor), factor_id="factor-id", user_id="user-id",
+    ) == 5
+    assert "enrollment_failed_attempts < 5" in cursor.query
+    assert "status = CASE" in cursor.query
+    assert "revoked_at = CASE" in cursor.query
+    assert cursor.params == ("factor-id", "user-id")
