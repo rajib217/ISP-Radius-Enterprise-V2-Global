@@ -135,3 +135,90 @@ def verify_webauthn_authentication(
         raise
     except Exception as exc:
         raise WebAuthnVerificationError("WebAuthn authentication verification failed") from exc
+
+
+def generate_registration_options_json(
+    *,
+    rp_id: str,
+    rp_name: str,
+    user_id: bytes,
+    user_name: str,
+    user_display_name: str,
+    challenge: bytes,
+    exclude_credential_ids: tuple[bytes, ...] = (),
+) -> str:
+    """Create browser-ready passkey enrollment options with required user verification."""
+    _validate_relying_party(expected_origin=f"https://{rp_id}", rp_id=rp_id)
+    if len(challenge) < 16 or not user_id or len(user_id) > 64:
+        raise ValueError("WebAuthn challenge and user handle must be valid")
+    if not rp_name or len(rp_name) > 128 or not user_name or len(user_name) > 256:
+        raise ValueError("WebAuthn relying-party and user names are required")
+    if not user_display_name or len(user_display_name) > 256:
+        raise ValueError("WebAuthn display name is required")
+    if any(not item or len(item) > 1024 for item in exclude_credential_ids):
+        raise ValueError("Invalid excluded WebAuthn credential ID")
+    try:
+        from webauthn import generate_registration_options, options_to_json
+        from webauthn.helpers.structs import (
+            AuthenticatorSelectionCriteria,
+            PublicKeyCredentialDescriptor,
+            ResidentKeyRequirement,
+            UserVerificationRequirement,
+        )
+
+        options = generate_registration_options(
+            rp_id=rp_id,
+            rp_name=rp_name,
+            user_id=user_id,
+            user_name=user_name,
+            user_display_name=user_display_name,
+            challenge=challenge,
+            authenticator_selection=AuthenticatorSelectionCriteria(
+                resident_key=ResidentKeyRequirement.REQUIRED,
+                user_verification=UserVerificationRequirement.REQUIRED,
+            ),
+            exclude_credentials=[
+                PublicKeyCredentialDescriptor(id=credential_id)
+                for credential_id in exclude_credential_ids
+            ],
+            timeout=60_000,
+        )
+        return options_to_json(options)
+    except Exception as exc:
+        raise WebAuthnVerificationError("Unable to generate WebAuthn registration options") from exc
+
+
+def generate_authentication_options_json(
+    *,
+    rp_id: str,
+    challenge: bytes,
+    allowed_credential_ids: tuple[bytes, ...],
+) -> str:
+    """Create browser-ready assertion options restricted to this user's credentials."""
+    _validate_relying_party(expected_origin=f"https://{rp_id}", rp_id=rp_id)
+    if len(challenge) < 16:
+        raise ValueError("WebAuthn challenge must contain at least 128 bits")
+    if not allowed_credential_ids or any(
+        not item or len(item) > 1024 for item in allowed_credential_ids
+    ):
+        raise ValueError("At least one valid active WebAuthn credential is required")
+    try:
+        from webauthn import generate_authentication_options, options_to_json
+        from webauthn.helpers.structs import (
+            PublicKeyCredentialDescriptor,
+            UserVerificationRequirement,
+        )
+
+        options = generate_authentication_options(
+            rp_id=rp_id,
+            challenge=challenge,
+            allow_credentials=[
+                PublicKeyCredentialDescriptor(id=credential_id)
+                for credential_id in allowed_credential_ids
+            ],
+            user_verification=UserVerificationRequirement.REQUIRED,
+            timeout=60_000,
+        )
+        return options_to_json(options)
+    except Exception as exc:
+        raise WebAuthnVerificationError("Unable to generate WebAuthn authentication options") from exc

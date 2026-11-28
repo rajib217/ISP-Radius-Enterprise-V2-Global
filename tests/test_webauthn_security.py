@@ -96,3 +96,97 @@ def test_authentication_returns_verified_counter_and_backup_state(monkeypatch):
     assert result.new_sign_count == 3
     assert result.backed_up is True
     assert result.user_verified is True
+
+
+def _install_fake_webauthn_modules(monkeypatch, *, root, structs):
+    import types
+
+    package = types.ModuleType("webauthn")
+    package.__path__ = []
+    for name, value in root.items():
+        setattr(package, name, value)
+    helpers = types.ModuleType("webauthn.helpers")
+    helpers.__path__ = []
+    structs_module = types.ModuleType("webauthn.helpers.structs")
+    for name, value in vars(structs).items():
+        if not name.startswith("_"):
+            setattr(structs_module, name, value)
+    monkeypatch.setitem(sys.modules, "webauthn", package)
+    monkeypatch.setitem(sys.modules, "webauthn.helpers", helpers)
+    monkeypatch.setitem(sys.modules, "webauthn.helpers.structs", structs_module)
+
+
+def test_registration_options_require_discoverable_uv_passkey(monkeypatch):
+    calls = {}
+    class Selection:
+        def __init__(self, **kwargs):
+            calls["selection"] = kwargs
+    class Descriptor:
+        def __init__(self, **kwargs):
+            calls.setdefault("excluded", []).append(kwargs)
+    class Resident:
+        REQUIRED = "required"
+    class UV:
+        REQUIRED = "required"
+    def generate(**kwargs):
+        calls.update(kwargs)
+        return {"challenge": "generated"}
+    structs = SimpleNamespace(
+        AuthenticatorSelectionCriteria=Selection,
+        ResidentKeyRequirement=Resident,
+        UserVerificationRequirement=UV,
+        PublicKeyCredentialDescriptor=Descriptor,
+    )
+    _install_fake_webauthn_modules(monkeypatch, root={
+        "generate_registration_options": generate,
+        "options_to_json": lambda value: '{"publicKey":true}',
+    }, structs=structs)
+    from isp_radius.security.webauthn import generate_registration_options_json
+    result = generate_registration_options_json(
+        rp_id="example.com", rp_name="ISP Console", user_id=b"user-id",
+        user_name="operator@example.com", user_display_name="Operator",
+        challenge=b"c" * 32, exclude_credential_ids=(b"existing",),
+    )
+    assert result == '{"publicKey":true}'
+    assert calls["selection"] == {
+        "resident_key": "required", "user_verification": "required"
+    }
+    assert calls["excluded"] == [{"id": b"existing"}]
+
+
+def test_authentication_options_are_uv_required_and_user_scoped(monkeypatch):
+    calls = {}
+    class Descriptor:
+        def __init__(self, **kwargs):
+            self.kwargs = kwargs
+    class UV:
+        REQUIRED = "required"
+    def generate(**kwargs):
+        calls.update(kwargs)
+        return {"challenge": "generated"}
+    structs = SimpleNamespace(
+        PublicKeyCredentialDescriptor=Descriptor,
+        UserVerificationRequirement=UV,
+    )
+    _install_fake_webauthn_modules(monkeypatch, root={
+        "generate_authentication_options": generate,
+        "options_to_json": lambda value: '{"allowCredentials":[]}',
+    }, structs=structs)
+    from isp_radius.security.webauthn import generate_authentication_options_json
+    result = generate_authentication_options_json(
+        rp_id="example.com", challenge=b"c" * 32,
+        allowed_credential_ids=(b"credential-1", b"credential-2"),
+    )
+    assert result == '{"allowCredentials":[]}'
+    assert calls["user_verification"] == "required"
+    assert [item.kwargs["id"] for item in calls["allow_credentials"]] == [
+        b"credential-1", b"credential-2"
+    ]
+
+
+def test_authentication_options_reject_empty_credential_list():
+    from isp_radius.security.webauthn import generate_authentication_options_json
+    with pytest.raises(ValueError, match="At least one"):
+        generate_authentication_options_json(
+            rp_id="example.com", challenge=b"c" * 32, allowed_credential_ids=(),
+        )
