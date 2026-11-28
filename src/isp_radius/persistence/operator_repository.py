@@ -343,3 +343,97 @@ def revoke_operator_sessions_for_user(connection: Any, *, user_id: str) -> int:
         return cursor.rowcount
     finally:
         cursor.close()
+
+
+
+def create_operator_webauthn_credential(
+    connection: Any, *, user_id: str, credential_id: bytes, public_key: bytes,
+    sign_count: int, transports: list[str], backup_eligible: bool, backup_state: bool,
+) -> str:
+    """Persist a verified credential; authenticator private keys are never stored."""
+    if not credential_id or len(credential_id) > 1024:
+        raise ValueError("WebAuthn credential ID length is invalid")
+    if not public_key or len(public_key) > 8192:
+        raise ValueError("WebAuthn public key length is invalid")
+    if sign_count < 0 or (backup_state and not backup_eligible):
+        raise ValueError("WebAuthn authenticator metadata is invalid")
+    credential_row_id = str(uuid4())
+    cursor = _cursor(connection)
+    try:
+        cursor.execute(
+            """
+            INSERT INTO operator_webauthn_credentials (
+                id, user_id, credential_id, public_key, sign_count, transports,
+                backup_eligible, backup_state
+            ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
+            """,
+            (credential_row_id, user_id, credential_id, public_key, sign_count,
+             transports, backup_eligible, backup_state),
+        )
+    finally:
+        cursor.close()
+    return credential_row_id
+
+
+def find_active_operator_webauthn_credential(
+    connection: Any, *, credential_id: bytes,
+) -> tuple[Any, ...] | None:
+    """Fetch public verification material for an active credential ID."""
+    cursor = _cursor(connection)
+    try:
+        cursor.execute(
+            """
+            SELECT id, user_id, public_key, sign_count, backup_eligible, backup_state
+              FROM operator_webauthn_credentials
+             WHERE credential_id = %s AND status = 'active'
+             LIMIT 1
+            """,
+            (credential_id,),
+        )
+        return cursor.fetchone()
+    finally:
+        cursor.close()
+
+
+def update_operator_webauthn_credential_after_assertion(
+    connection: Any, *, credential_row_id: str, user_id: str, new_sign_count: int,
+    backup_eligible: bool, backup_state: bool,
+) -> bool:
+    """Update metadata only after successful assertion verification."""
+    if new_sign_count < 0 or (backup_state and not backup_eligible):
+        raise ValueError("WebAuthn authenticator metadata is invalid")
+    cursor = _cursor(connection)
+    try:
+        cursor.execute(
+            """
+            UPDATE operator_webauthn_credentials
+               SET sign_count = GREATEST(sign_count, %s),
+                   backup_eligible = %s, backup_state = %s, last_used_at = now()
+             WHERE id = %s AND user_id = %s AND status = 'active'
+            RETURNING id
+            """,
+            (new_sign_count, backup_eligible, backup_state, credential_row_id, user_id),
+        )
+        return cursor.fetchone() is not None
+    finally:
+        cursor.close()
+
+
+def revoke_operator_webauthn_credential(
+    connection: Any, *, user_id: str, credential_row_id: str,
+) -> bool:
+    """Revoke one credential owned by the specified operator."""
+    cursor = _cursor(connection)
+    try:
+        cursor.execute(
+            """
+            UPDATE operator_webauthn_credentials
+               SET status = 'revoked', revoked_at = now()
+             WHERE id = %s AND user_id = %s AND status = 'active'
+            RETURNING id
+            """,
+            (credential_row_id, user_id),
+        )
+        return cursor.fetchone() is not None
+    finally:
+        cursor.close()

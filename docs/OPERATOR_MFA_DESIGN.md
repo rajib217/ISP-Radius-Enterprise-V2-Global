@@ -81,6 +81,8 @@ Do not add plaintext TOTP secrets, raw challenges, raw recovery codes, or revers
 6. Add integration tests for replay, expired challenges, cross-origin rejection, concurrent redemption, recovery-code reuse, factor reset and session revocation.
 7. Only then enable MFA enforcement and proceed to the production operator dashboard.
 
-## Current status
+## WebAuthn implementation status
 
-This document records the security design and initial persistence foundation. Migration 0015 and repository primitives are implemented, but cryptographic WebAuthn/TOTP verification, KMS integration, enrollment/login API integration, recovery approval and PostgreSQL concurrency tests are **not implemented**. MFA is **not enforced**. The current operator login remains password-only and must not be treated as production-ready for internet-exposed operator access.
+The WebAuthn verification adapter uses the maintained `webauthn` (py_webauthn) library for attestation and assertion verification. It validates configured origin shape, passes the exact challenge, origin and RP ID to the library, requires user verification by default, and returns only public credential material and authenticator metadata. Repository primitives persist verified credentials, fetch active public keys, update counters and backup state after successful assertions, and revoke credentials with an owner check. Challenge generation uses 32 random bytes; only its SHA-256 digest belongs in the challenge table.
+
+These are security primitives, not a complete login feature. Browser option endpoints, frontend ceremony handling, atomic challenge consumption after successful verification, TOTP KMS provider integration, login state-machine enforcement, recovery approval, audit/notification wiring and PostgreSQL concurrency tests remain **not implemented**. MFA is **not enforced**. The current operator login remains password-only and must not be treated as production-ready for internet-exposed operator access.
