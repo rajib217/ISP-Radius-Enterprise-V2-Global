@@ -25,9 +25,12 @@ from isp_radius.aaa.authorization import authorize_subscriber
 from isp_radius.persistence.operator_repository import (
     accept_operator_totp_step,
     activate_operator_totp_factor,
+    approve_operator_factor_reset,
     clear_operator_login_failures,
     consume_operator_login_mfa_challenge,
-    consume_operator_mfa_challenge,\n    consume_operator_recovery_code,\n    has_available_operator_recovery_codes,\n    replace_operator_recovery_codes,\n    create_operator_factor_reset_request,\n    approve_operator_factor_reset,
+    consume_operator_mfa_challenge,
+    consume_operator_recovery_code,
+    create_operator_factor_reset_request,
     create_operator_login_mfa_challenge,
     create_operator_mfa_challenge,
     create_operator_session,
@@ -41,15 +44,18 @@ from isp_radius.persistence.operator_repository import (
     find_pending_operator_login_mfa_challenge,
     find_pending_operator_mfa_challenge,
     find_pending_operator_totp_factor,
+    has_available_operator_recovery_codes,
     insert_operator_audit_event,
     list_active_operator_webauthn_credential_ids,
     operator_login_rate_limited,
     record_operator_login_failure,
     record_operator_mfa_challenge_failure,
     record_operator_totp_enrollment_failure,
+    replace_operator_recovery_codes,
     resolve_operator_session,
-    revoke_operator_mfa_challenges,\n    revoke_operator_sessions_for_user,
+    revoke_operator_mfa_challenges,
     revoke_operator_session,
+    revoke_operator_sessions_for_user,
     update_operator_webauthn_credential_after_assertion,
 )
 from isp_radius.persistence.session_monitoring_repository import (
@@ -72,8 +78,10 @@ from isp_radius.security.operator_mfa import (
     decrypt_totp_secret,
     encrypt_totp_secret,
     generate_totp_secret,
+    generate_recovery_codes,
+    hash_recovery_code,
     totp_provisioning_uri,
-    verify_totp,\n    generate_recovery_codes,\n    hash_recovery_code,
+    verify_totp,
 )
 from isp_radius.security.webauthn import (
     WebAuthnVerificationError,
@@ -317,6 +325,7 @@ async def operator_login(
     session_data: tuple[object, ...] | None = None
     login_mfa_data: tuple[str, dict[str, object]] | None = None
     login_totp_fallback: str | None = None
+    login_recovery_fallback: str | None = None
 
     with connection.transaction():
         if operator_login_rate_limited(
