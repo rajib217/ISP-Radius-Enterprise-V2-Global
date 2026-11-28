@@ -23,7 +23,12 @@ def test_recovery_code_normalization_is_case_and_separator_insensitive():
     assert hash_recovery_code(code) == hash_recovery_code(code.replace("-", "").lower())
 
 
-@pytest.mark.parametrize("value", ["", "abc", "G" * 36, "A" * 35, "A" * 37, None])
+@pytest.mark.parametrize("value", ["", "abc", "G" * 36, "A" * 35, "A" * 37])
 def test_recovery_code_rejects_invalid_values(value):
     with pytest.raises(ValueError, match="invalid recovery code"):
         hash_recovery_code(value)
+
+
+def test_recovery_code_rejects_non_string_values():
+    with pytest.raises(TypeError, match="invalid recovery code"):
+        hash_recovery_code(None)
