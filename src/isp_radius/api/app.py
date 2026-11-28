@@ -13,7 +13,7 @@ from urllib.parse import parse_qs
 import psycopg
 from fastapi import Depends, FastAPI, Header, HTTPException, Query, Request, Response, status
 from psycopg_pool import ConnectionPool, PoolTimeout
-from starlette.concurrency import run_in_threadpool
+from starlette.concurrency import run_in_threadpool\nfrom starlette.responses import JSONResponse\nfrom uuid import UUID
 
 from isp_radius.aaa.accounting import normalize_accounting
 from isp_radius.aaa.authentication import authenticate_subscriber
@@ -23,6 +23,26 @@ from isp_radius.persistence.session_monitoring_repository import (
     list_subscriber_sessions,
 )
 from isp_radius.persistence.session_repository import record_accounting_event_with_usage
+from isp_radius.persistence.operator_repository import (
+    clear_operator_login_failures,
+    create_operator_session,
+    find_operator_memberships,
+    insert_operator_audit_event,
+    operator_login_rate_limited,
+    record_operator_login_failure,
+    resolve_operator_session,
+    revoke_operator_session,
+)
+from isp_radius.security.operator_auth import (
+    OperatorPrincipal,
+    burn_operator_password_verification,
+    csrf_matches,
+    hash_token,
+    issue_session_tokens,
+    normalize_operator_email,
+    permissions_for_role,
+    verify_operator_password,
+)
 
 
 def _pool_sizes() -> tuple[int, int]:
@@ -118,6 +138,254 @@ def _monitoring_tenant_dependency(
 ) -> str:
     """Authenticate monitoring requests before acquiring a database connection."""
     return _monitoring_principal(authorization)
+
+
+
+def _operator_origin_guard(request: Request) -> None:
+    allowed = {
+        item.strip().rstrip("/")
+        for item in os.environ.get("OPERATOR_ALLOWED_ORIGINS", "").split(",")
+        if item.strip()
+    }
+    origin = request.headers.get("origin", "").rstrip("/")
+    if not allowed:
+        raise HTTPException(status_code=503, detail="Operator origin policy is not configured")
+    if not origin or origin not in allowed:
+        raise HTTPException(status_code=403, detail="Request origin is not allowed")
+
+
+def _operator_cookie_secure() -> bool:
+    value = os.environ.get("OPERATOR_COOKIE_SECURE", "true").strip().lower()
+    if value not in {"true", "false"}:
+        raise HTTPException(status_code=503, detail="Operator cookie policy is invalid")
+    if value == "false" and os.environ.get("APP_ENV", "production").lower() not in {
+        "development", "test"
+    }:
+        raise HTTPException(status_code=503, detail="Secure operator cookies are required")
+    return value == "true"
+
+
+def _operator_client_ip(request: Request) -> str:
+    return request.client.host if request.client else "unknown"
+
+
+def _operator_principal_dependency(
+    request: Request,
+    connection: psycopg.Connection = _database_dependency,
+) -> OperatorPrincipal:
+    token = request.cookies.get("operator_session")
+    if not token:
+        raise HTTPException(status_code=401, detail="Operator authentication required")
+    try:
+        token_hash = hash_token(token)
+    except ValueError:
+        raise HTTPException(status_code=401, detail="Invalid operator session") from None
+    row = resolve_operator_session(connection, token_hash=token_hash)
+    if row is None:
+        raise HTTPException(status_code=401, detail="Invalid or expired operator session")
+    return OperatorPrincipal(
+        session_id=str(row[0]),
+        user_id=str(row[1]),
+        email=str(row[2]),
+        tenant_id=str(row[3]),
+        role=str(row[4]),
+        csrf_token_hash=str(row[5]),
+    )
+
+
+@app.post("/operator/login")
+async def operator_login(
+    request: Request,
+    response: Response,
+    connection: psycopg.Connection = _database_dependency,
+) -> dict[str, object]:
+    """Authenticate an operator and issue opaque, tenant-bound browser cookies."""
+    _operator_origin_guard(request)
+    raw_body = await request.body()
+    if len(raw_body) > 8192:
+        raise HTTPException(status_code=413, detail="Request too large")
+    try:
+        payload = json.loads(raw_body)
+    except (UnicodeDecodeError, json.JSONDecodeError):
+        raise HTTPException(status_code=400, detail="Invalid login request") from None
+    if not isinstance(payload, dict):
+        raise HTTPException(status_code=400, detail="Invalid login request")
+    try:
+        email = normalize_operator_email(payload.get("email", ""))
+    except (AttributeError, ValueError):
+        raise HTTPException(status_code=400, detail="Invalid login request") from None
+    password = payload.get("password")
+    if not isinstance(password, str) or not password or len(password) > 1024:
+        raise HTTPException(status_code=400, detail="Invalid login request")
+    requested_tenant = payload.get("tenant_id")
+    if requested_tenant is not None:
+        try:
+            requested_tenant = str(UUID(requested_tenant))
+        except (ValueError, TypeError, AttributeError):
+            raise HTTPException(status_code=400, detail="Invalid tenant selection") from None
+
+    remote_ip = _operator_client_ip(request)
+    email_hash = hash_token(email)
+    ip_hash = hash_token(remote_ip)
+    login_error: tuple[int, object] | None = None
+    session_data: tuple[object, ...] | None = None
+
+    with connection.transaction():
+        if operator_login_rate_limited(
+            connection, email_hash=email_hash, ip_hash=ip_hash
+        ):
+            login_error = (429, "Too many login attempts. Try again later.")
+        else:
+            rows = find_operator_memberships(connection, email=email)
+            if not rows:
+                burn_operator_password_verification(password)
+                record_operator_login_failure(
+                    connection, email_hash=email_hash, ip_hash=ip_hash
+                )
+                login_error = (401, "Invalid email or password")
+            else:
+                user_id, canonical_email, password_hash, user_status = rows[0][:4]
+                valid_password = verify_operator_password(password_hash, password)
+                active_memberships = [
+                    row for row in rows
+                    if row[4] is not None and row[6] == "active"
+                ]
+                if not valid_password or user_status != "active" or not active_memberships:
+                    record_operator_login_failure(
+                        connection, email_hash=email_hash, ip_hash=ip_hash
+                    )
+                    login_error = (401, "Invalid email or password")
+                else:
+                    selected = active_memberships
+                    if requested_tenant is not None:
+                        selected = [row for row in active_memberships if str(row[4]) == requested_tenant]
+                        if not selected:
+                            login_error = (403, "Tenant membership is not active")
+                    elif len(active_memberships) > 1:
+                        login_error = (
+                            409,
+                            {"message": "Tenant selection required",
+                             "tenants": [{"tenant_id": str(row[4]), "role": str(row[5])}
+                                         for row in active_memberships]},
+                        )
+                    if login_error is None:
+                        membership = selected[0]
+                        tokens = issue_session_tokens()
+                        session_id = create_operator_session(
+                            connection,
+                            user_id=str(user_id),
+                            tenant_id=str(membership[4]),
+                            token_hash=tokens.session_hash,
+                            csrf_token_hash=tokens.csrf_hash,
+                            expires_at=tokens.expires_at,
+                            remote_ip=remote_ip,
+                            user_agent=request.headers.get("user-agent"),
+                        )
+                        clear_operator_login_failures(
+                            connection, email_hash=email_hash, ip_hash=ip_hash
+                        )
+                        insert_operator_audit_event(
+                            connection,
+                            tenant_id=str(membership[4]),
+                            actor_user_id=str(user_id),
+                            actor_kind="operator",
+                            action="auth.login.succeeded",
+                            remote_ip=remote_ip,
+                            target_type="operator_session",
+                            target_id=session_id,
+                            metadata={"role": str(membership[5])},
+                        )
+                        session_data = (
+                            str(canonical_email), str(membership[4]), str(membership[5]),
+                            tokens, session_id,
+                        )
+
+    if login_error is not None:
+        raise HTTPException(status_code=login_error[0], detail=login_error[1])
+    if session_data is None:
+        raise HTTPException(status_code=401, detail="Invalid email or password")
+
+    canonical_email, tenant_id, role, tokens, _session_id = session_data
+    secure = _operator_cookie_secure()
+    response.set_cookie(
+        "operator_session", tokens.session_token, max_age=43200,
+        httponly=True, secure=secure, samesite="lax", path="/",
+    )
+    response.set_cookie(
+        "operator_csrf", tokens.csrf_token, max_age=43200,
+        httponly=False, secure=secure, samesite="lax", path="/",
+    )
+    return {
+        "operator": {"email": canonical_email, "tenant_id": tenant_id, "role": role},
+        "csrf_token": tokens.csrf_token,
+        "expires_at": tokens.expires_at.isoformat(),
+    }
+
+
+@app.get("/operator/session")
+def operator_session(
+    request: Request,
+    principal: OperatorPrincipal = Depends(_operator_principal_dependency),
+) -> dict[str, object]:
+    csrf_cookie = request.cookies.get("operator_csrf")
+    if not csrf_cookie:
+        raise HTTPException(status_code=401, detail="Operator CSRF cookie is missing")
+    try:
+        csrf_valid = hmac.compare_digest(
+            hash_token(csrf_cookie), principal.csrf_token_hash
+        )
+    except ValueError:
+        csrf_valid = False
+    if not csrf_valid:
+        raise HTTPException(status_code=401, detail="Operator CSRF cookie is invalid")
+    return {
+        "operator": {
+            "user_id": principal.user_id,
+            "email": principal.email,
+            "tenant_id": principal.tenant_id,
+            "role": principal.role,
+        },
+        "permissions": sorted(permissions_for_role(principal.role)),
+        "csrf_token": csrf_cookie,
+    }
+
+
+@app.post("/operator/logout", status_code=status.HTTP_204_NO_CONTENT)
+def operator_logout(
+    request: Request,
+    response: Response,
+    x_csrf_token: str | None = Header(default=None),
+    principal: OperatorPrincipal = Depends(_operator_principal_dependency),
+    connection: psycopg.Connection = _database_dependency,
+) -> Response:
+    _operator_origin_guard(request)
+    csrf_cookie = request.cookies.get("operator_csrf")
+    if not csrf_matches(
+        supplied_header=x_csrf_token,
+        csrf_cookie=csrf_cookie,
+        stored_hash=principal.csrf_token_hash,
+    ):
+        raise HTTPException(status_code=403, detail="CSRF validation failed")
+    session_token = request.cookies.get("operator_session", "")
+    with connection.transaction():
+        revoked = revoke_operator_session(
+            connection, token_hash=hash_token(session_token)
+        )
+        if revoked is not None:
+            insert_operator_audit_event(
+                connection,
+                tenant_id=principal.tenant_id,
+                actor_user_id=principal.user_id,
+                actor_kind="operator",
+                action="auth.logout",
+                remote_ip=_operator_client_ip(request),
+                target_type="operator_session",
+                target_id=str(revoked[0]),
+            )
+    secure = _operator_cookie_secure()
+    response.delete_cookie("operator_session", path="/", secure=secure, httponly=True, samesite="lax")
+    response.delete_cookie("operator_csrf", path="/", secure=secure, httponly=False, samesite="lax")
+    return response
 
 
 @app.get("/health/live")

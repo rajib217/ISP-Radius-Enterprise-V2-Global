@@ -79,6 +79,17 @@ def issue_session_tokens(*, now: datetime | None = None) -> SessionTokens:
     )
 
 
+_DUMMY_PASSWORD_HASH = _PASSWORD_HASHER.hash("not-a-real-operator-password")
+
+
+def burn_operator_password_verification(password: str) -> None:
+    """Perform a dummy Argon2id verification to reduce account-enumeration timing."""
+    try:
+        _PASSWORD_HASHER.verify(_DUMMY_PASSWORD_HASH, password[:1024] or "invalid")
+    except (VerifyMismatchError, VerificationError, InvalidHashError):
+        pass
+
+
 def verify_operator_password(password_hash: str, password: str) -> bool:
     if not password or len(password) > 1024 or not password_hash.startswith("$argon2id$"):
         return False

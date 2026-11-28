@@ -135,3 +135,73 @@ def insert_operator_audit_event(
     finally:
         cursor.close()
     return event_id
+
+
+
+def operator_login_rate_limited(
+    connection: Any, *, email_hash: str, ip_hash: str
+) -> bool:
+    cursor = _cursor(connection)
+    try:
+        cursor.execute(
+            """
+            SELECT 1 FROM operator_login_attempts
+             WHERE locked_until > now()
+               AND ((scope = 'email' AND identifier_hash = %s)
+                 OR (scope = 'ip' AND identifier_hash = %s))
+             LIMIT 1
+            """,
+            (email_hash, ip_hash),
+        )
+        return cursor.fetchone() is not None
+    finally:
+        cursor.close()
+
+
+def record_operator_login_failure(
+    connection: Any, *, email_hash: str, ip_hash: str
+) -> None:
+    cursor = _cursor(connection)
+    try:
+        for scope, identifier_hash in (("email", email_hash), ("ip", ip_hash)):
+            cursor.execute(
+                """
+                INSERT INTO operator_login_attempts (
+                    scope, identifier_hash, failed_attempts,
+                    window_started_at, updated_at
+                ) VALUES (%s, %s, 1, now(), now())
+                ON CONFLICT (scope, identifier_hash) DO UPDATE SET
+                    failed_attempts = CASE
+                        WHEN operator_login_attempts.window_started_at < now() - interval '15 minutes'
+                        THEN 1 ELSE operator_login_attempts.failed_attempts + 1 END,
+                    window_started_at = CASE
+                        WHEN operator_login_attempts.window_started_at < now() - interval '15 minutes'
+                        THEN now() ELSE operator_login_attempts.window_started_at END,
+                    locked_until = CASE
+                        WHEN (CASE
+                            WHEN operator_login_attempts.window_started_at < now() - interval '15 minutes'
+                            THEN 1 ELSE operator_login_attempts.failed_attempts + 1 END) >= 5
+                        THEN now() + interval '15 minutes' ELSE NULL END,
+                    updated_at = now()
+                """,
+                (scope, identifier_hash),
+            )
+    finally:
+        cursor.close()
+
+
+def clear_operator_login_failures(
+    connection: Any, *, email_hash: str, ip_hash: str
+) -> None:
+    cursor = _cursor(connection)
+    try:
+        cursor.execute(
+            """
+            DELETE FROM operator_login_attempts
+             WHERE (scope = 'email' AND identifier_hash = %s)
+                OR (scope = 'ip' AND identifier_hash = %s)
+            """,
+            (email_hash, ip_hash),
+        )
+    finally:
+        cursor.close()
