@@ -19,11 +19,6 @@ from starlette.concurrency import run_in_threadpool
 from isp_radius.aaa.accounting import normalize_accounting
 from isp_radius.aaa.authentication import authenticate_subscriber
 from isp_radius.aaa.authorization import authorize_subscriber
-from isp_radius.persistence.session_monitoring_repository import (
-    get_subscriber_session_summary,
-    list_subscriber_sessions,
-)
-from isp_radius.persistence.session_repository import record_accounting_event_with_usage
 from isp_radius.persistence.operator_repository import (
     clear_operator_login_failures,
     create_operator_session,
@@ -34,6 +29,11 @@ from isp_radius.persistence.operator_repository import (
     resolve_operator_session,
     revoke_operator_session,
 )
+from isp_radius.persistence.session_monitoring_repository import (
+    get_subscriber_session_summary,
+    list_subscriber_sessions,
+)
+from isp_radius.persistence.session_repository import record_accounting_event_with_usage
 from isp_radius.security.operator_auth import (
     OperatorPrincipal,
     burn_operator_password_verification,
@@ -194,6 +194,9 @@ def _operator_principal_dependency(
     )
 
 
+_operator_principal_dependency_injected = Depends(_operator_principal_dependency)
+
+
 @app.post("/operator/login")
 async def operator_login(
     request: Request,
@@ -334,7 +337,7 @@ async def operator_login(
 @app.get("/operator/session")
 def operator_session(
     request: Request,
-    principal: OperatorPrincipal = Depends(_operator_principal_dependency),
+    principal: OperatorPrincipal = _operator_principal_dependency_injected,
 ) -> dict[str, object]:
     csrf_cookie = request.cookies.get("operator_csrf")
     if not csrf_cookie:
