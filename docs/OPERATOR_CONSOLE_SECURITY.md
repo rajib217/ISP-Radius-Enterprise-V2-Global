@@ -1,7 +1,7 @@
 # Operator Console Security Boundary
 
 ## Status
-Initial operator authentication is implemented at `/operator/login`, `/operator/session` and `/operator/logout`. It verifies Argon2id credentials, resolves active tenant memberships, requires tenant selection for multi-tenant users, issues opaque HttpOnly session cookies, validates CSRF and Origin on logout, throttles login failures, and writes audit events. The `/monitoring/*` bearer-token mechanism remains service-to-service only. The browser BFF and per-route permission enforcement are not yet implemented.
+Initial operator authentication is implemented at `/operator/login`, `/operator/session` and `/operator/logout`. It verifies Argon2id credentials, resolves active tenant memberships, requires tenant selection for multi-tenant users, issues opaque HttpOnly session cookies, validates CSRF and Origin on logout, throttles login failures, and writes audit events. The `/monitoring/*` bearer-token mechanism remains service-to-service only. The read-only monitoring BFF is implemented at `/operator/monitoring/sessions` and `/operator/monitoring/sessions/summary`; it derives tenant scope from the operator session and enforces `sessions:read`. Permission enforcement for future write routes remains pending.
 
 ## Required request path
 
@@ -9,7 +9,6 @@ Initial operator authentication is implemented at `/operator/login`, `/operator/
 Browser
   -> HTTPS operator session (HttpOnly cookie)
   -> authenticated server-side BFF
-  -> private monitoring API (server-held service credential)
   -> tenant-scoped repository
   -> PostgreSQL
 ```
@@ -51,7 +50,7 @@ The initial dashboard is read-only:
 ## Delivery gates
 Before browser release:
 - Identity, tenant membership, login/session lifecycle, CSRF/origin checks, login throttling, role mapping and audit storage are implemented and migrated.
-- Automated tests prove login, tenant selection, session lookup, CSRF rejection and logout revocation. BFF-specific unauthenticated, unauthorized and cross-tenant tests remain required.
+- Automated tests cover login, tenant selection, session lookup, CSRF rejection, logout revocation, missing BFF sessions, denied roles and session-derived tenant scope. Cross-tenant isolation tests remain required for each additional route.
 - Cross-tenant access tests cover every BFF route and repository query.
 - Browser bundles and source maps are scanned to confirm no service secrets are present.
 - CSRF, 30-minute idle expiry, 12-hour absolute expiry, revocation and login throttling are tested. Security headers and MFA remain outstanding.
