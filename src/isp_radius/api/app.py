@@ -232,10 +232,10 @@ def require_operator_permission(permission: str):
     return dependency
 
 
+_operator_principal_dependency_injected = Depends(_operator_principal_dependency)
 _operator_sessions_read_dependency = Depends(
     require_operator_permission("sessions:read")
 )
-_operator_principal_dependency_injected = Depends(_operator_principal_dependency)
 
 
 @app.post("/operator/login")
