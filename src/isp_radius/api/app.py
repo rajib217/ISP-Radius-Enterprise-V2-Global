@@ -9,11 +9,12 @@ from collections.abc import AsyncIterator, Generator
 from contextlib import asynccontextmanager
 from ipaddress import ip_address
 from urllib.parse import parse_qs
+from uuid import UUID
 
 import psycopg
 from fastapi import Depends, FastAPI, Header, HTTPException, Query, Request, Response, status
 from psycopg_pool import ConnectionPool, PoolTimeout
-from starlette.concurrency import run_in_threadpool\nfrom starlette.responses import JSONResponse\nfrom uuid import UUID
+from starlette.concurrency import run_in_threadpool
 
 from isp_radius.aaa.accounting import normalize_accounting
 from isp_radius.aaa.authentication import authenticate_subscriber
