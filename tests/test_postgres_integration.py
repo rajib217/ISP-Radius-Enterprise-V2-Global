@@ -313,7 +313,7 @@ def test_all_migrations_and_accounting_session_lifecycle():
                  'active', %s, %s, 30, 40, 0)
             """,
             (
-                online_id, tenant_id, now - timedelta(seconds=60),
+                online_id, tenant_id, now - timedelta(seconds=120),
                 now - timedelta(seconds=10),
                 stale_id, tenant_id, now - timedelta(hours=1),
                 now - timedelta(minutes=10),
