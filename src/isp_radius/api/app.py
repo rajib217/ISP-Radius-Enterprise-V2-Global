@@ -494,7 +494,7 @@ async def operator_webauthn_registration_options(
         )
         options = json.loads(options_json)
         if not isinstance(options, dict) or not isinstance(options.get("challenge"), str):
-            raise ValueError("Malformed registration options")
+            raise TypeError("Malformed registration options")
         if not hmac.compare_digest(
             hash_webauthn_challenge(_decode_webauthn_challenge(options["challenge"])),
             hash_webauthn_challenge(challenge),
