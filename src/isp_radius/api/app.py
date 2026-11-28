@@ -201,6 +201,7 @@ async def operator_login(
 ) -> dict[str, object]:
     """Authenticate an operator and issue opaque, tenant-bound browser cookies."""
     _operator_origin_guard(request)
+    secure = _operator_cookie_secure()
     raw_body = await request.body()
     if len(raw_body) > 8192:
         raise HTTPException(status_code=413, detail="Request too large")
@@ -271,6 +272,14 @@ async def operator_login(
                     if login_error is None:
                         membership = selected[0]
                         tokens = issue_session_tokens()
+                        existing_token = request.cookies.get("operator_session")
+                        if existing_token:
+                            try:
+                                revoke_operator_session(
+                                    connection, token_hash=hash_token(existing_token)
+                                )
+                            except ValueError:
+                                pass
                         session_id = create_operator_session(
                             connection,
                             user_id=str(user_id),
@@ -306,7 +315,6 @@ async def operator_login(
         raise HTTPException(status_code=401, detail="Invalid email or password")
 
     canonical_email, tenant_id, role, tokens, _session_id = session_data
-    secure = _operator_cookie_secure()
     response.set_cookie(
         "operator_session", tokens.session_token, max_age=43200,
         httponly=True, secure=secure, samesite="lax", path="/",

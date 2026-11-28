@@ -68,7 +68,7 @@ def resolve_operator_session(connection: Any, *, token_hash: str) -> tuple[Any, 
               JOIN operator_tenant_memberships AS m
                 ON m.tenant_id = s.tenant_id AND m.user_id = s.user_id
              WHERE s.token_hash = %s
-               AND s.revoked_at IS NULL AND s.expires_at > now()
+               AND s.revoked_at IS NULL AND s.expires_at > now()\n               AND s.last_seen_at > now() - interval '30 minutes'
                AND u.status = 'active' AND m.status = 'active'
              LIMIT 1
             """,
