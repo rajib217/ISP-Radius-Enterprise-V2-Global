@@ -7,9 +7,9 @@ import hashlib
 import hmac
 import json
 import os
-from datetime import UTC, datetime, timedelta
 from collections.abc import AsyncIterator, Generator
 from contextlib import asynccontextmanager
+from datetime import UTC, datetime, timedelta
 from ipaddress import ip_address
 from urllib.parse import parse_qs
 from uuid import UUID
@@ -24,18 +24,18 @@ from isp_radius.aaa.authentication import authenticate_subscriber
 from isp_radius.aaa.authorization import authorize_subscriber
 from isp_radius.persistence.operator_repository import (
     clear_operator_login_failures,
+    consume_operator_mfa_challenge,
+    create_operator_mfa_challenge,
     create_operator_session,
+    create_operator_webauthn_credential,
     find_operator_memberships,
     find_operator_password_hash,
     find_pending_operator_mfa_challenge,
-    list_active_operator_webauthn_credential_ids,
-    create_operator_mfa_challenge,
-    consume_operator_mfa_challenge,
-    record_operator_mfa_challenge_failure,
-    create_operator_webauthn_credential,
     insert_operator_audit_event,
+    list_active_operator_webauthn_credential_ids,
     operator_login_rate_limited,
     record_operator_login_failure,
+    record_operator_mfa_challenge_failure,
     resolve_operator_session,
     revoke_operator_session,
 )
@@ -44,13 +44,6 @@ from isp_radius.persistence.session_monitoring_repository import (
     list_subscriber_sessions,
 )
 from isp_radius.persistence.session_repository import record_accounting_event_with_usage
-from isp_radius.security.webauthn import (
-    WebAuthnVerificationError,
-    generate_webauthn_challenge,
-    generate_registration_options_json,
-    hash_webauthn_challenge,
-    verify_webauthn_registration,
-)
 from isp_radius.security.operator_auth import (
     OperatorPrincipal,
     burn_operator_password_verification,
@@ -60,6 +53,13 @@ from isp_radius.security.operator_auth import (
     normalize_operator_email,
     permissions_for_role,
     verify_operator_password,
+)
+from isp_radius.security.webauthn import (
+    WebAuthnVerificationError,
+    generate_registration_options_json,
+    generate_webauthn_challenge,
+    hash_webauthn_challenge,
+    verify_webauthn_registration,
 )
 
 
