@@ -63,3 +63,10 @@ This is a foundational schema, not a complete billing or statutory accounting im
 - Recovery codes store only SHA-256 digests and are consumed with a conditional update. Generate high-entropy codes and display them once.
 - Factor reset must revoke all outstanding challenges and active operator sessions in the same database transaction.
 - Migration 0015 adds storage and repository primitives only. It does not change the login flow or enforce MFA. Complete cryptographic verification, KMS integration, recovery approvals and PostgreSQL concurrency tests before enabling MFA.
+
+## 0016: TOTP wrapped data key
+
+Adds the KMS-wrapped AES-256 data key to operator TOTP factor records. TOTP
+secrets are encrypted with AES-256-GCM using a fresh data key and nonce; the
+wrapped data key is stored separately and can only be unwrapped by the configured
+KMS provider. Migration 0016 is additive and precedes any TOTP enrollment flow.
