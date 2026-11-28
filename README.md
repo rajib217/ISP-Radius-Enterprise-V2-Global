@@ -40,7 +40,7 @@ Vendor-neutral AAA and ISP network operations platform. This is a separate V2 co
 - `tests/`: automated tests
 - `pyproject.toml`: Python package and test configuration
 
-Operator identity storage (migration 0013) is now present; login/session enforcement and RBAC remain pending. See [Operator Console Security](docs/OPERATOR_CONSOLE_SECURITY.md) for the required security boundary.\n\nSee [Architecture](docs/ARCHITECTURE.md), [Product scope](docs/PRODUCT_SCOPE.md), [Roadmap](docs/ROADMAP.md), [V1 audit](docs/V1_AUDIT.md), [operator console security](docs/OPERATOR_CONSOLE_SECURITY.md), and [database migration notes](migrations/README.md).
+Operator identity storage, password login/session handling, login throttling, audit events and read-only BFF permission checks are implemented. MFA enforcement and permission coverage for future write routes remain pending. See [Operator Console Security](docs/OPERATOR_CONSOLE_SECURITY.md) and the [Operator MFA Design](docs/OPERATOR_MFA_DESIGN.md).\n\nSee [Architecture](docs/ARCHITECTURE.md), [Product scope](docs/PRODUCT_SCOPE.md), [Roadmap](docs/ROADMAP.md), [V1 audit](docs/V1_AUDIT.md), [operator console security](docs/OPERATOR_CONSOLE_SECURITY.md), [operator MFA design](docs/OPERATOR_MFA_DESIGN.md), and [database migration notes](migrations/README.md).
 
 ## Development
 Requires Python 3.12+.

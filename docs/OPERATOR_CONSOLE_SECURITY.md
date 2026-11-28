@@ -1,7 +1,7 @@
 # Operator Console Security Boundary
 
 ## Status
-Initial operator authentication is implemented at `/operator/login`, `/operator/session` and `/operator/logout`. It verifies Argon2id credentials, resolves active tenant memberships, requires tenant selection for multi-tenant users, issues opaque HttpOnly session cookies, validates CSRF and Origin on logout, throttles login failures, and writes audit events. The `/monitoring/*` bearer-token mechanism remains service-to-service only. The read-only monitoring BFF is implemented at `/operator/monitoring/sessions` and `/operator/monitoring/sessions/summary`; it derives tenant scope from the operator session and enforces `sessions:read`. Permission enforcement for future write routes remains pending.
+Initial password-based operator authentication is implemented at `/operator/login`, `/operator/session` and `/operator/logout`. It verifies Argon2id credentials, resolves active tenant memberships, requires tenant selection for multi-tenant users, issues opaque HttpOnly session cookies, validates CSRF and Origin on logout, throttles login failures, and writes audit events. MFA is not yet implemented or enforced; the current login flow must not be treated as production-ready for internet-exposed operator access. The approved MFA design is documented in [Operator MFA Design](OPERATOR_MFA_DESIGN.md). The `/monitoring/*` bearer-token mechanism remains service-to-service only. The read-only monitoring BFF is implemented at `/operator/monitoring/sessions` and `/operator/monitoring/sessions/summary`; it derives tenant scope from the operator session and enforces `sessions:read`. Permission enforcement for future write routes remains pending.
 
 ## Required request path
 
@@ -57,7 +57,7 @@ Before browser release:
 - Security headers are tested, and HSTS is emitted only for HTTPS requests.
 - Each operator route declares its required permission through a reusable dependency.
 - Browser bundles and source maps are scanned to confirm no service secrets are present.
-- CSRF, 30-minute idle expiry, 12-hour absolute expiry, revocation and login throttling are tested. Security headers are implemented; MFA remains outstanding.
+- CSRF, 30-minute idle expiry, 12-hour absolute expiry, revocation and login throttling are tested. Security headers are implemented. MFA enrollment, verification, recovery and mandatory enforcement remain release blockers.
 - UI includes loading, empty, stale-data, API-error and permission-denied states.
 - A security review and deployment runbook are completed.
 
@@ -67,7 +67,7 @@ Before browser release:
 - `OPERATOR_COOKIE_SECURE`: defaults to `true`. Setting it to `false` is permitted only when `APP_ENV` is `development` or `test`.
 - Session lifetime: 12-hour absolute expiry and 30-minute idle timeout.
 - Login throttling: five failures per email/IP pair or IP in a 15-minute window trigger a 15-minute lock.
-- Apply migrations through `0014_operator_login_throttling.sql` before enabling operator login.
+- Apply migrations through `0014_operator_login_throttling.sql` before enabling the current password-based operator login. A later migration is required for MFA factor, challenge and recovery-code storage before MFA can be enabled.
 
 ## Explicit non-goals for the first release
 No browser-stored service bearer token, no tenant selection by arbitrary request parameter, no write operations, no claim that a stale session is offline, and no automatic cleanup or billing based on monitoring state.
