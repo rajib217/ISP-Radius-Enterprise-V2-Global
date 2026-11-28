@@ -394,6 +394,7 @@ def operator_logout(
     secure = _operator_cookie_secure()
     response.delete_cookie("operator_session", path="/", secure=secure, httponly=True, samesite="lax")
     response.delete_cookie("operator_csrf", path="/", secure=secure, httponly=False, samesite="lax")
+    response.status_code = status.HTTP_204_NO_CONTENT
     return response
 
 
