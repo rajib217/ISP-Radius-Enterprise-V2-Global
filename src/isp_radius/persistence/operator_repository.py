@@ -783,6 +783,11 @@ def approve_operator_factor_reset(
                   AND EXISTS (SELECT 1 FROM operator_tenant_memberships AS m
                     WHERE m.tenant_id = r.tenant_id AND m.user_id = %s
                       AND m.status = 'active' AND m.role IN ('owner', 'admin'))
+                  AND EXISTS (SELECT 1 FROM operator_tenant_memberships AS requester
+                    WHERE requester.tenant_id = r.tenant_id
+                      AND requester.user_id = r.requester_user_id
+                      AND requester.status = 'active'
+                      AND requester.role IN ('owner', 'admin'))
                 RETURNING r.target_user_id""",
             (approver_user_id, request_id, tenant_id, approver_user_id, approver_user_id),
         )
