@@ -2,7 +2,9 @@
 
 Vendor-neutral AAA and ISP network operations platform. This is a separate V2 codebase; V1 remains unchanged: https://github.com/rajib217/ISP-Radius-Enterprise
 
-**Status:** early implementation. Includes normalized and idempotent RADIUS accounting ingestion, transactional PostgreSQL session projection, Argon2id subscriber authentication, a private REST API, interactive Argon2id password provisioning, explicit RADIUS reply profiles, and FreeRADIUS 3.2 PAP authentication, authorization and accounting templates. A tenant-scoped CoA/Disconnect command domain and durable audit outbox are implemented; MikroTik bandwidth CoA attributes are generated from the explicit RouterOS profile. The outbox does not yet transmit packets. RFC 5176 packet encoding/verification, worker leasing/retry, operator API authentication/RBAC, and live NAS tests remain pending. CI exercises PostgreSQL 16 migrations and accounting lifecycle. The API uses a bounded per-worker PostgreSQL connection pool. Production validation remains pending: CHAP/MS-CHAP/EAP, API rate limiting, HA, load testing, FreeRADIUS config parsing on the target distribution, and live NAS validation are not complete.
+**Status:** early implementation. Includes normalized and idempotent RADIUS accounting ingestion, transactional PostgreSQL session projection and usage metering, Argon2id subscriber authentication, a private REST API, interactive Argon2id password provisioning, explicit RADIUS reply profiles, and FreeRADIUS 3.2 PAP authentication, authorization and accounting templates. A tenant-scoped CoA/Disconnect outbox, RFC 5176 UDP transport, leased retry worker, and read-only tenant-scoped session monitoring API are implemented. Monitoring API access currently uses configured SHA-256 bearer-token hashes with the `sessions:read` permission. This is service-level API-key authentication, not a complete human operator identity, login, session, or role-management system.
+
+**Not production-ready:** CHAP/MS-CHAP/EAP, API rate limiting, production operator identity and RBAC, browser-safe operator-console authentication, full HA, load testing, target-distribution FreeRADIUS validation, and live NAS interoperability remain incomplete. The operator dashboard must not embed monitoring API keys in browser code. Build the operator identity/session/RBAC and server-side API boundary before exposing monitoring data in a browser console. Production validation and security review are required before deployment.
 
 ## Product goals
 - RADIUS AAA: authentication, authorization, accounting, session lifecycle, CoA and disconnect.
@@ -21,22 +23,24 @@ Vendor-neutral AAA and ISP network operations platform. This is a separate V2 co
 5. Keep secrets and customer data out of source control.
 6. Make schema changes through versioned migrations.
 7. Preserve V1 as a reference and migration source, never as a write target.
+8. Derive tenant scope from authenticated server-side identity; never trust a browser-supplied tenant ID.
+9. Never ship service API keys or database credentials to browser clients.
 
 ## Initial repository layout
 - `src/isp_radius/aaa/`: normalized accounting, Argon2id authentication, and CoA/Disconnect command domain
-- `src/isp_radius/api/`: private REST authentication, authorization and accounting API
+- `src/isp_radius/api/`: private REST authentication, authorization, accounting and monitoring API
 - `deploy/freeradius/3.2/`: FreeRADIUS integration templates
 - `src/isp_radius/domain/`: tenant, subscriber, service-plan and NAS value objects
 - `src/isp_radius/finance/`: currency-safe journal and reversal primitives
-- `src/isp_radius/persistence/`: tenant-scoped accounting event and session repositories
-- `migrations/`: PostgreSQL schema migrations
+- `src/isp_radius/persistence/`: tenant-scoped accounting event, usage and session repositories
+- `src/isp_radius/worker/`: durable CoA/Disconnect command dispatcher
 - `docs/UI_UX_DESIGN_SYSTEM.md`: operator-focused interface and charting standards
 - `docs/BILLING_FINANCIAL_CONTROLS.md`: double-entry accounting and financial control requirements
 - `docs/`: architecture, scope, adapter contract, security, roadmap and decisions
 - `tests/`: automated tests
 - `pyproject.toml`: Python package and test configuration
 
-See [Architecture](docs/ARCHITECTURE.md), [Product scope](docs/PRODUCT_SCOPE.md), [Roadmap](docs/ROADMAP.md), [V1 audit](docs/V1_AUDIT.md), and [database migration notes](migrations/README.md).
+See [Architecture](docs/ARCHITECTURE.md), [Product scope](docs/PRODUCT_SCOPE.md), [Roadmap](docs/ROADMAP.md), [V1 audit](docs/V1_AUDIT.md), [operator console security](docs/OPERATOR_CONSOLE_SECURITY.md), and [database migration notes](migrations/README.md).
 
 ## Development
 Requires Python 3.12+.
@@ -49,23 +53,17 @@ pytest
 ruff check src tests
 ```
 
-## License
-Apache License 2.0. See [LICENSE](LICENSE).
-
-
 ## Read-only subscriber session monitoring
 
 Endpoints: `GET /monitoring/sessions` and `GET /monitoring/sessions/summary`.
 
-Configure `MONITORING_API_KEY_HASHES` as a JSON object keyed by lowercase
-SHA-256 bearer-token hashes. Each value must contain `tenant_id` and a
-`permissions` array including `sessions:read`. Generate a token and digest:
+Configure `MONITORING_API_KEY_HASHES` as a JSON object keyed by lowercase SHA-256 bearer-token hashes. Each value must contain `tenant_id` and a `permissions` array including `sessions:read`. Generate a token and digest:
 
 ```bash
 python -c 'import hashlib,secrets; key=secrets.token_urlsafe(32); print("API_KEY="+key); print("SHA256="+hashlib.sha256(key.encode()).hexdigest())'
 ```
 
-Keep the API key secret and store only its digest in deployment configuration.
-Use TLS, restrict network access, rotate keys, and keep configuration in a
-deployment secret store. A stale session means accounting updates are overdue,
-not that disconnection is confirmed.
+Keep the API key secret and store only its digest in deployment configuration. Use TLS, restrict network access, rotate keys, and keep configuration in a deployment secret store. These credentials are intended for trusted service-to-service access, not direct browser delivery. A stale session means accounting updates are overdue, not that disconnection is confirmed.
+
+## License
+Apache License 2.0. See `LICENSE`.
