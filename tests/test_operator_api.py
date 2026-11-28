@@ -29,6 +29,7 @@ def _client(monkeypatch, rows):
     monkeypatch.setattr("isp_radius.api.app.clear_operator_login_failures", lambda *_a, **_k: None)
     monkeypatch.setattr("isp_radius.api.app.insert_operator_audit_event", lambda *_a, **_k: "audit-id")
     monkeypatch.setattr("isp_radius.api.app.create_operator_session", lambda *_a, **_k: "session-id")
+    monkeypatch.setattr("isp_radius.api.app.list_active_operator_webauthn_credential_ids", lambda *_a, **_k: ())
     return TestClient(app), connection
 
 
@@ -396,3 +397,108 @@ def test_webauthn_registration_verification_consumes_challenge_and_persists_publ
     assert persisted[0]["credential_id"] == b"credential-id"
     assert persisted[0]["public_key"] == b"public-key"
     assert persisted[0]["transports"] == ["internal"]
+
+
+def test_operator_login_with_registered_passkey_returns_challenge_without_session(monkeypatch):
+    import base64
+    import json
+
+    user_id, tenant_id = str(uuid4()), str(uuid4())
+    password_hash = PasswordHasher(time_cost=1, memory_cost=8192, parallelism=1).hash("correct-password")
+    client, _ = _client(
+        monkeypatch,
+        [(user_id, "operator@example.com", password_hash, "active", tenant_id, "viewer", "active")],
+    )
+    monkeypatch.setenv("OPERATOR_WEBAUTHN_RP_ID", "testserver")
+    monkeypatch.setattr(
+        "isp_radius.api.app.list_active_operator_webauthn_credential_ids",
+        lambda *_a, **_k: (b"registered-credential",),
+    )
+    monkeypatch.setattr(
+        "isp_radius.api.app.generate_authentication_options_json",
+        lambda **kwargs: json.dumps({
+            "challenge": base64.urlsafe_b64encode(kwargs["challenge"]).rstrip(b"=").decode("ascii"),
+            "rpId": kwargs["rp_id"],
+        }),
+    )
+    persisted = []
+    monkeypatch.setattr(
+        "isp_radius.api.app.create_operator_login_mfa_challenge",
+        lambda *_a, **kwargs: persisted.append(kwargs) or "challenge-row",
+    )
+    created_sessions = []
+    monkeypatch.setattr(
+        "isp_radius.api.app.create_operator_session",
+        lambda *_a, **_k: created_sessions.append(True) or "session-id",
+    )
+    try:
+        response = client.post(
+            "/operator/login",
+            headers={"Origin": "http://testserver"},
+            json={"email": "operator@example.com", "password": "correct-password"},
+        )
+    finally:
+        app.dependency_overrides.clear()
+
+    assert response.status_code == 200
+    assert response.json()["mfa_required"] is True
+    assert response.json()["method"] == "webauthn"
+    assert response.json()["publicKey"]["rpId"] == "testserver"
+    assert persisted[0]["tenant_id"] == tenant_id
+    assert created_sessions == []
+    assert response.headers.get_list("set-cookie") == []
+
+
+def test_operator_login_webauthn_verify_issues_session_only_after_assertion(monkeypatch):
+    import base64
+    from types import SimpleNamespace
+
+    user_id, tenant_id = str(uuid4()), str(uuid4())
+    client, _ = _client(monkeypatch, [])
+    monkeypatch.setenv("OPERATOR_WEBAUTHN_RP_ID", "testserver")
+    challenge = b"c" * 32
+    encoded_challenge = base64.urlsafe_b64encode(challenge).rstrip(b"=").decode("ascii")
+    encoded_credential = base64.urlsafe_b64encode(b"registered-credential").rstrip(b"=").decode("ascii")
+    monkeypatch.setattr(
+        "isp_radius.api.app.find_pending_operator_login_mfa_challenge",
+        lambda *_a, **_k: ("challenge-row", user_id, tenant_id),
+    )
+    monkeypatch.setattr(
+        "isp_radius.api.app.find_active_operator_webauthn_credential",
+        lambda *_a, **_k: ("credential-row", user_id, b"public-key", 0, False, False),
+    )
+    monkeypatch.setattr(
+        "isp_radius.api.app.verify_webauthn_authentication",
+        lambda **_kwargs: SimpleNamespace(
+            new_sign_count=0, device_type="single_device", backed_up=False, user_verified=True,
+        ),
+    )
+    monkeypatch.setattr(
+        "isp_radius.api.app.consume_operator_login_mfa_challenge",
+        lambda *_a, **_k: ("challenge-row", user_id, tenant_id),
+    )
+    monkeypatch.setattr(
+        "isp_radius.api.app.update_operator_webauthn_credential_after_assertion",
+        lambda *_a, **_k: True,
+    )
+    monkeypatch.setattr(
+        "isp_radius.api.app.find_operator_tenant_membership",
+        lambda *_a, **_k: ("operator@example.com", "viewer"),
+    )
+    try:
+        response = client.post(
+            "/operator/login/webauthn/verify",
+            headers={"Origin": "http://testserver"},
+            json={
+                "challenge": encoded_challenge,
+                "credential": {"id": encoded_credential, "rawId": encoded_credential, "response": {}},
+            },
+        )
+    finally:
+        app.dependency_overrides.clear()
+
+    assert response.status_code == 200
+    assert response.json()["operator"]["tenant_id"] == tenant_id
+    cookies = response.headers.get_list("set-cookie")
+    assert any(value.startswith("operator_session=") and "httponly" in value.lower() for value in cookies)
+    assert any(value.startswith("operator_csrf=") for value in cookies)

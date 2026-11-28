@@ -397,42 +397,42 @@ async def operator_login(
                             # Temporary bootstrap path: accounts without a passkey can enroll.
                             # Production MFA enforcement remains disabled until fallback/recovery exists.
                             tokens = issue_session_tokens()
-                        existing_token = request.cookies.get("operator_session")
-                        if existing_token:
-                            try:
-                                revoke_operator_session(
-                                    connection, token_hash=hash_token(existing_token)
-                                )
-                            except ValueError:
-                                pass
-                        session_id = create_operator_session(
-                            connection,
-                            user_id=str(user_id),
-                            tenant_id=str(membership[4]),
-                            token_hash=tokens.session_hash,
-                            csrf_token_hash=tokens.csrf_hash,
-                            expires_at=tokens.expires_at,
-                            remote_ip=remote_ip,
-                            user_agent=request.headers.get("user-agent"),
-                        )
-                        clear_operator_login_failures(
-                            connection, email_hash=email_hash, ip_hash=ip_hash
-                        )
-                        insert_operator_audit_event(
-                            connection,
-                            tenant_id=str(membership[4]),
-                            actor_user_id=str(user_id),
-                            actor_kind="operator",
-                            action="auth.login.succeeded",
-                            remote_ip=remote_ip,
-                            target_type="operator_session",
-                            target_id=session_id,
-                            metadata={"role": str(membership[5])},
-                        )
-                        session_data = (
-                            str(canonical_email), str(membership[4]), str(membership[5]),
-                            tokens, session_id,
-                        )
+                            existing_token = request.cookies.get("operator_session")
+                            if existing_token:
+                                try:
+                                    revoke_operator_session(
+                                        connection, token_hash=hash_token(existing_token)
+                                    )
+                                except ValueError:
+                                    pass
+                            session_id = create_operator_session(
+                                connection,
+                                user_id=str(user_id),
+                                tenant_id=str(membership[4]),
+                                token_hash=tokens.session_hash,
+                                csrf_token_hash=tokens.csrf_hash,
+                                expires_at=tokens.expires_at,
+                                remote_ip=remote_ip,
+                                user_agent=request.headers.get("user-agent"),
+                            )
+                            clear_operator_login_failures(
+                                connection, email_hash=email_hash, ip_hash=ip_hash
+                            )
+                            insert_operator_audit_event(
+                                connection,
+                                tenant_id=str(membership[4]),
+                                actor_user_id=str(user_id),
+                                actor_kind="operator",
+                                action="auth.login.succeeded",
+                                remote_ip=remote_ip,
+                                target_type="operator_session",
+                                target_id=session_id,
+                                metadata={"role": str(membership[5])},
+                            )
+                            session_data = (
+                                str(canonical_email), str(membership[4]), str(membership[5]),
+                                tokens, session_id,
+                            )
 
     if login_error is not None:
         raise HTTPException(status_code=login_error[0], detail=login_error[1])
