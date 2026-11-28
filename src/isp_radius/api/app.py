@@ -367,7 +367,7 @@ def operator_logout(
     request: Request,
     response: Response,
     x_csrf_token: str | None = Header(default=None),
-    principal: OperatorPrincipal = Depends(_operator_principal_dependency),
+    principal: OperatorPrincipal = _operator_principal_dependency_injected,
     connection: psycopg.Connection = _database_dependency,
 ) -> Response:
     _operator_origin_guard(request)
