@@ -255,7 +255,7 @@ def test_all_migrations_and_accounting_session_lifecycle():
         with connection.transaction():
             assert record_accounting_event(connection, tenant_id=tenant_id, event=stale)
 
-        stop = _event("Stop", base + timedelta(seconds=15), 300)
+        stop = _event("Stop", base + timedelta(seconds=30), 300)
         with connection.transaction():
             assert record_accounting_event(connection, tenant_id=tenant_id, event=stop)
 
@@ -277,7 +277,7 @@ def test_all_migrations_and_accounting_session_lifecycle():
         assert row[0] == "stopped"
         assert row[1] == base
         assert row[2] == base + timedelta(seconds=20)
-        assert row[3] == base + timedelta(seconds=15)
+        assert row[3] == base + timedelta(seconds=30)
         assert row[4] == 300
         assert row[5] == 600
         assert row[6] == 20
