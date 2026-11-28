@@ -210,7 +210,6 @@ def test_operator_monitoring_bff_rejects_missing_session_before_session_lookup(m
     def fake_resolve(*_a, **_k):
         nonlocal lookup_called
         lookup_called = True
-        return None
 
     monkeypatch.setattr("isp_radius.api.app.resolve_operator_session", fake_resolve)
     client = TestClient(app)
