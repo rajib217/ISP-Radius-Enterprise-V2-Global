@@ -478,3 +478,21 @@ def list_active_operator_webauthn_credential_ids(
         return tuple(row[0] for row in cursor.fetchall())
     finally:
         cursor.close()
+
+
+def find_operator_password_hash(connection: Any, *, user_id: str) -> tuple[str, str] | None:
+    """Fetch active operator password material for a fresh-authentication check."""
+    cursor = _cursor(connection)
+    try:
+        cursor.execute(
+            """
+            SELECT password_hash, status
+              FROM operator_users
+             WHERE id = %s
+             LIMIT 1
+            """,
+            (user_id,),
+        )
+        return cursor.fetchone()
+    finally:
+        cursor.close()

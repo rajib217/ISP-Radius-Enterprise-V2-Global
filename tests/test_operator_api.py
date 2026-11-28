@@ -290,3 +290,106 @@ def test_operator_monitoring_summary_denies_role_without_permission(monkeypatch)
 
     assert response.status_code == 403
     assert repository_called is False
+
+
+
+def test_webauthn_registration_options_require_password_reauth_and_return_browser_options(monkeypatch):
+    import base64
+    import json
+
+    from isp_radius.api.app import _operator_principal_dependency
+    from isp_radius.security.operator_auth import OperatorPrincipal
+
+    user_id, tenant_id = str(uuid4()), str(uuid4())
+    csrf = "csrf-token-for-webauthn"
+    principal = OperatorPrincipal(
+        user_id=user_id, email="operator@example.com", tenant_id=tenant_id,
+        role="owner", session_id="session-id", csrf_token_hash=hash_token(csrf),
+    )
+    client, _ = _client(monkeypatch, [])
+    app.dependency_overrides[_operator_principal_dependency] = lambda: principal
+    monkeypatch.setenv("OPERATOR_WEBAUTHN_RP_ID", "localhost")
+    monkeypatch.setattr("isp_radius.api.app.find_operator_password_hash", lambda *_a, **_k: ("hashed", "active"))
+    monkeypatch.setattr("isp_radius.api.app.verify_operator_password", lambda *_a, **_k: True)
+    monkeypatch.setattr("isp_radius.api.app.generate_webauthn_challenge", lambda: b"x" * 32)
+    monkeypatch.setattr("isp_radius.api.app.list_active_operator_webauthn_credential_ids", lambda *_a, **_k: ())
+    monkeypatch.setattr(
+        "isp_radius.api.app.generate_registration_options_json",
+        lambda **_k: json.dumps({"challenge": base64.urlsafe_b64encode(b"x" * 32).decode().rstrip("=")}),
+    )
+    stored = []
+    monkeypatch.setattr("isp_radius.api.app.create_operator_mfa_challenge", lambda *_a, **kw: stored.append(kw) or "challenge-id")
+    try:
+        client.cookies.set("operator_session", "session-cookie")
+        client.cookies.set("operator_csrf", csrf)
+        response = client.post(
+            "/operator/webauthn/register/options",
+            headers={"Origin": "http://localhost", "X-CSRF-Token": csrf},
+            json={"password": "current-password"},
+        )
+    finally:
+        app.dependency_overrides.clear()
+
+    assert response.status_code == 200
+    assert response.json()["publicKey"]["challenge"].startswith("eHh4")
+    assert stored[0]["user_id"] == user_id
+    assert stored[0]["method"] == "webauthn"
+    assert stored[0]["origin"] == "http://localhost"
+    assert stored[0]["rp_id"] == "localhost"
+
+
+def test_webauthn_registration_verification_consumes_challenge_and_persists_public_key(monkeypatch):
+    import base64
+
+    from isp_radius.api.app import _operator_principal_dependency
+    from isp_radius.security.operator_auth import OperatorPrincipal
+    from isp_radius.security.webauthn import VerifiedRegistration
+
+    user_id, tenant_id = str(uuid4()), str(uuid4())
+    csrf = "csrf-token-for-webauthn"
+    challenge = b"y" * 32
+    challenge_text = base64.urlsafe_b64encode(challenge).decode().rstrip("=")
+    principal = OperatorPrincipal(
+        user_id=user_id, email="operator@example.com", tenant_id=tenant_id,
+        role="owner", session_id="session-id", csrf_token_hash=hash_token(csrf),
+    )
+    client, _ = _client(monkeypatch, [])
+    app.dependency_overrides[_operator_principal_dependency] = lambda: principal
+    monkeypatch.setenv("OPERATOR_WEBAUTHN_RP_ID", "localhost")
+    monkeypatch.setattr(
+        "isp_radius.api.app.find_pending_operator_mfa_challenge",
+        lambda *_a, **_k: ("challenge-id", user_id),
+    )
+    monkeypatch.setattr(
+        "isp_radius.api.app.verify_webauthn_registration",
+        lambda **_k: VerifiedRegistration(b"credential-id", b"public-key", 0, "single_device", False),
+    )
+    monkeypatch.setattr(
+        "isp_radius.api.app.consume_operator_mfa_challenge",
+        lambda *_a, **_k: ("challenge-id", user_id),
+    )
+    persisted = []
+    monkeypatch.setattr(
+        "isp_radius.api.app.create_operator_webauthn_credential",
+        lambda *_a, **kw: persisted.append(kw) or "credential-row",
+    )
+    try:
+        client.cookies.set("operator_session", "session-cookie")
+        client.cookies.set("operator_csrf", csrf)
+        response = client.post(
+            "/operator/webauthn/register/verify",
+            headers={"Origin": "http://localhost", "X-CSRF-Token": csrf},
+            json={
+                "challenge": challenge_text,
+                "credential": {"id": "browser-id", "response": {"transports": ["internal"]}},
+            },
+        )
+    finally:
+        app.dependency_overrides.clear()
+
+    assert response.status_code == 200
+    assert response.json()["status"] == "registered"
+    assert persisted[0]["user_id"] == user_id
+    assert persisted[0]["credential_id"] == b"credential-id"
+    assert persisted[0]["public_key"] == b"public-key"
+    assert persisted[0]["transports"] == ["internal"]

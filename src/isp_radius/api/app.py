@@ -1,10 +1,13 @@
 """Private REST endpoint consumed by FreeRADIUS rlm_rest."""
 from __future__ import annotations
 
+import base64
+import binascii
 import hashlib
 import hmac
 import json
 import os
+from datetime import UTC, datetime, timedelta
 from collections.abc import AsyncIterator, Generator
 from contextlib import asynccontextmanager
 from ipaddress import ip_address
@@ -23,6 +26,13 @@ from isp_radius.persistence.operator_repository import (
     clear_operator_login_failures,
     create_operator_session,
     find_operator_memberships,
+    find_operator_password_hash,
+    find_pending_operator_mfa_challenge,
+    list_active_operator_webauthn_credential_ids,
+    create_operator_mfa_challenge,
+    consume_operator_mfa_challenge,
+    record_operator_mfa_challenge_failure,
+    create_operator_webauthn_credential,
     insert_operator_audit_event,
     operator_login_rate_limited,
     record_operator_login_failure,
@@ -34,6 +44,13 @@ from isp_radius.persistence.session_monitoring_repository import (
     list_subscriber_sessions,
 )
 from isp_radius.persistence.session_repository import record_accounting_event_with_usage
+from isp_radius.security.webauthn import (
+    WebAuthnVerificationError,
+    generate_webauthn_challenge,
+    generate_registration_options_json,
+    hash_webauthn_challenge,
+    verify_webauthn_registration,
+)
 from isp_radius.security.operator_auth import (
     OperatorPrincipal,
     burn_operator_password_verification,
@@ -388,6 +405,204 @@ async def operator_login(
         "csrf_token": tokens.csrf_token,
         "expires_at": tokens.expires_at.isoformat(),
     }
+
+
+
+
+def _operator_csrf_guard(
+    request: Request, principal: OperatorPrincipal, supplied_token: str | None,
+) -> None:
+    if not csrf_matches(
+        supplied_header=supplied_token,
+        csrf_cookie=request.cookies.get("operator_csrf"),
+        stored_hash=principal.csrf_token_hash,
+    ):
+        raise HTTPException(status_code=403, detail="CSRF validation failed")
+
+
+def _operator_webauthn_config(request: Request) -> tuple[str, str]:
+    origin = request.headers.get("origin", "").rstrip("/")
+    _operator_origin_guard(request)
+    rp_id = os.environ.get("OPERATOR_WEBAUTHN_RP_ID", "").strip().lower().rstrip(".")
+    if not rp_id or len(rp_id) > 253 or any(ch.isspace() for ch in rp_id):
+        raise HTTPException(status_code=503, detail="WebAuthn relying-party policy is not configured")
+    from urllib.parse import urlsplit
+
+    host = (urlsplit(origin).hostname or "").lower().rstrip(".")
+    if not host or not (host == rp_id or host.endswith("." + rp_id)):
+        raise HTTPException(status_code=503, detail="WebAuthn origin and RP ID do not match")
+    return origin, rp_id
+
+
+def _decode_webauthn_challenge(value: object) -> bytes:
+    if not isinstance(value, str) or not 22 <= len(value) <= 128:
+        raise HTTPException(status_code=400, detail="Invalid WebAuthn challenge")
+    try:
+        encoded = value.encode("ascii")
+        decoded = base64.b64decode(
+            encoded + b"=" * (-len(encoded) % 4), altchars=b"-_", validate=True,
+        )
+    except (UnicodeEncodeError, binascii.Error, ValueError):
+        raise HTTPException(status_code=400, detail="Invalid WebAuthn challenge") from None
+    if len(decoded) != 32:
+        raise HTTPException(status_code=400, detail="Invalid WebAuthn challenge")
+    return decoded
+
+
+@app.post("/operator/webauthn/register/options")
+async def operator_webauthn_registration_options(
+    request: Request,
+    x_csrf_token: str | None = Header(default=None),
+    principal: OperatorPrincipal = _operator_principal_dependency_injected,
+    connection: psycopg.Connection = _database_dependency,
+) -> dict[str, object]:
+    """Create a password-reauthenticated, user-bound passkey registration ceremony."""
+    _operator_csrf_guard(request, principal, x_csrf_token)
+    origin, rp_id = _operator_webauthn_config(request)
+    raw_body = await request.body()
+    if len(raw_body) > 4096:
+        raise HTTPException(status_code=413, detail="Request too large")
+    try:
+        payload = json.loads(raw_body)
+    except (UnicodeDecodeError, json.JSONDecodeError):
+        raise HTTPException(status_code=400, detail="Invalid enrollment request") from None
+    if not isinstance(payload, dict):
+        raise HTTPException(status_code=400, detail="Invalid enrollment request")
+    password = payload.get("password")
+    if not isinstance(password, str) or not password or len(password) > 1024:
+        raise HTTPException(status_code=400, detail="Password re-authentication is required")
+
+    password_row = find_operator_password_hash(connection, user_id=principal.user_id)
+    if (
+        password_row is None or password_row[1] != "active"
+        or not verify_operator_password(password_row[0], password)
+    ):
+        raise HTTPException(status_code=401, detail="Password re-authentication failed")
+
+    challenge = generate_webauthn_challenge()
+    try:
+        options_json = generate_registration_options_json(
+            rp_id=rp_id,
+            rp_name=os.environ.get("OPERATOR_WEBAUTHN_RP_NAME", "ISP RADIUS Operator"),
+            user_id=UUID(principal.user_id).bytes,
+            user_name=principal.email,
+            user_display_name=principal.email,
+            challenge=challenge,
+            exclude_credential_ids=list_active_operator_webauthn_credential_ids(
+                connection, user_id=principal.user_id,
+            ),
+        )
+        options = json.loads(options_json)
+        if not isinstance(options, dict) or not isinstance(options.get("challenge"), str):
+            raise ValueError("Malformed registration options")
+        if not hmac.compare_digest(
+            hash_webauthn_challenge(_decode_webauthn_challenge(options["challenge"])),
+            hash_webauthn_challenge(challenge),
+        ):
+            raise ValueError("Registration options challenge mismatch")
+    except (ValueError, WebAuthnVerificationError, TypeError):
+        raise HTTPException(status_code=503, detail="Unable to start passkey enrollment") from None
+
+    challenge_hash = hash_webauthn_challenge(challenge)
+    with connection.transaction():
+        create_operator_mfa_challenge(
+            connection,
+            user_id=principal.user_id,
+            challenge_hash=challenge_hash,
+            method="webauthn",
+            origin=origin,
+            rp_id=rp_id,
+            expires_at=datetime.now(UTC) + timedelta(minutes=5),
+        )
+        insert_operator_audit_event(
+            connection, tenant_id=principal.tenant_id, actor_user_id=principal.user_id,
+            actor_kind="operator", action="auth.webauthn.registration.started",
+            remote_ip=_operator_client_ip(request), metadata={"method": "webauthn"},
+        )
+    return {"publicKey": options}
+
+
+@app.post("/operator/webauthn/register/verify")
+async def operator_webauthn_registration_verify(
+    request: Request,
+    x_csrf_token: str | None = Header(default=None),
+    principal: OperatorPrincipal = _operator_principal_dependency_injected,
+    connection: psycopg.Connection = _database_dependency,
+) -> dict[str, object]:
+    """Verify attestation, then atomically consume its challenge and store public key."""
+    _operator_csrf_guard(request, principal, x_csrf_token)
+    origin, rp_id = _operator_webauthn_config(request)
+    raw_body = await request.body()
+    if len(raw_body) > 16384:
+        raise HTTPException(status_code=413, detail="Request too large")
+    try:
+        payload = json.loads(raw_body)
+    except (UnicodeDecodeError, json.JSONDecodeError):
+        raise HTTPException(status_code=400, detail="Invalid enrollment response") from None
+    if not isinstance(payload, dict) or not isinstance(payload.get("credential"), dict):
+        raise HTTPException(status_code=400, detail="Invalid enrollment response")
+    challenge = _decode_webauthn_challenge(payload.get("challenge"))
+    challenge_hash = hash_webauthn_challenge(challenge)
+    pending = find_pending_operator_mfa_challenge(
+        connection, challenge_hash=challenge_hash, method="webauthn",
+        origin=origin, rp_id=rp_id,
+    )
+    if pending is None or str(pending[1]) != principal.user_id:
+        raise HTTPException(status_code=400, detail="Passkey enrollment challenge is invalid or expired")
+
+    credential = payload["credential"]
+    response_data = credential.get("response")
+    if not isinstance(response_data, dict):
+        raise HTTPException(status_code=400, detail="Invalid enrollment response")
+    transports = response_data.get("transports", credential.get("transports", []))
+    allowed_transports = {"usb", "nfc", "ble", "smart-card", "hybrid", "internal"}
+    if (
+        not isinstance(transports, list) or len(transports) > 6
+        or any(not isinstance(item, str) or item not in allowed_transports for item in transports)
+    ):
+        raise HTTPException(status_code=400, detail="Invalid authenticator transports")
+
+    try:
+        verified = verify_webauthn_registration(
+            credential=credential,
+            expected_challenge=challenge,
+            expected_origin=origin,
+            rp_id=rp_id,
+            require_user_verification=True,
+        )
+    except (WebAuthnVerificationError, ValueError):
+        record_operator_mfa_challenge_failure(connection, challenge_hash=challenge_hash)
+        raise HTTPException(status_code=400, detail="Passkey registration verification failed") from None
+
+    try:
+        with connection.transaction():
+            consumed = consume_operator_mfa_challenge(
+                connection, challenge_hash=challenge_hash, method="webauthn",
+                origin=origin, rp_id=rp_id,
+            )
+            if consumed is None or str(consumed[1]) != principal.user_id:
+                raise HTTPException(status_code=409, detail="Passkey enrollment challenge was already used")
+            credential_row_id = create_operator_webauthn_credential(
+                connection,
+                user_id=principal.user_id,
+                credential_id=verified.credential_id,
+                public_key=verified.credential_public_key,
+                sign_count=verified.sign_count,
+                transports=transports,
+                backup_eligible=verified.device_type == "multi_device",
+                backup_state=verified.backed_up,
+            )
+            insert_operator_audit_event(
+                connection, tenant_id=principal.tenant_id, actor_user_id=principal.user_id,
+                actor_kind="operator", action="auth.webauthn.registration.succeeded",
+                remote_ip=_operator_client_ip(request), target_type="webauthn_credential",
+                target_id=credential_row_id,
+                metadata={"method": "webauthn", "backup_eligible": verified.device_type == "multi_device"},
+            )
+    except psycopg.IntegrityError:
+        raise HTTPException(status_code=409, detail="This passkey is already registered") from None
+
+    return {"status": "registered", "credential_id": credential_row_id}
 
 
 @app.get("/operator/session")
