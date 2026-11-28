@@ -706,3 +706,113 @@ def find_operator_password_hash(connection: Any, *, user_id: str) -> tuple[str, 
         return cursor.fetchone()
     finally:
         cursor.close()
+
+
+def replace_operator_recovery_codes(connection: Any, *, user_id: str, batch_id: str, code_hashes: list[str]) -> None:
+    """Replace the current batch and persist only one-way digests."""
+    if len(code_hashes) != 10 or any(
+        len(value) != 64 or any(ch not in "0123456789abcdef" for ch in value)
+        for value in code_hashes
+    ):
+        raise ValueError("exactly ten SHA-256 recovery digests are required")
+    cursor = _cursor(connection)
+    try:
+        cursor.execute(
+            "UPDATE operator_mfa_recovery_codes SET consumed_at = now() WHERE user_id = %s AND consumed_at IS NULL",
+            (user_id,),
+        )
+        for digest in code_hashes:
+            cursor.execute(
+                """INSERT INTO operator_mfa_recovery_codes (id, user_id, batch_id, code_hash)
+                   VALUES (%s, %s, %s, %s)""",
+                (str(uuid4()), user_id, batch_id, digest),
+            )
+    finally:
+        cursor.close()
+
+
+def has_available_operator_recovery_codes(connection: Any, *, user_id: str) -> bool:
+    cursor = _cursor(connection)
+    try:
+        cursor.execute(
+            "SELECT 1 FROM operator_mfa_recovery_codes WHERE user_id = %s AND consumed_at IS NULL LIMIT 1",
+            (user_id,),
+        )
+        return cursor.fetchone() is not None
+    finally:
+        cursor.close()
+
+
+def create_operator_factor_reset_request(
+    connection: Any, *, request_id: str, tenant_id: str, target_user_id: str,
+    requester_user_id: str, reason: str, expires_at: Any,
+) -> bool:
+    """Create a request for another active member of the same tenant."""
+    if requester_user_id == target_user_id or not reason.strip() or len(reason) > 500:
+        return False
+    cursor = _cursor(connection)
+    try:
+        cursor.execute(
+            """INSERT INTO operator_mfa_reset_requests
+                   (id, tenant_id, target_user_id, requester_user_id, reason, expires_at)
+               SELECT %s, %s, %s, %s, %s, %s
+                WHERE EXISTS (SELECT 1 FROM operator_tenant_memberships
+                    WHERE tenant_id = %s AND user_id = %s AND status = 'active')
+               ON CONFLICT DO NOTHING""",
+            (request_id, tenant_id, target_user_id, requester_user_id,
+             reason.strip(), expires_at, tenant_id, target_user_id),
+        )
+        return cursor.rowcount == 1
+    finally:
+        cursor.close()
+
+
+def approve_operator_factor_reset(
+    connection: Any, *, request_id: str, tenant_id: str, approver_user_id: str,
+) -> str | None:
+    """Execute a dual-control reset atomically in the caller's transaction."""
+    cursor = _cursor(connection)
+    try:
+        cursor.execute(
+            """UPDATE operator_mfa_reset_requests AS r
+                  SET status = 'approved', approver_user_id = %s, approved_at = now()
+                WHERE r.id = %s AND r.tenant_id = %s AND r.status = 'pending'
+                  AND r.expires_at > now() AND r.requester_user_id <> %s
+                  AND EXISTS (SELECT 1 FROM operator_tenant_memberships AS m
+                    WHERE m.tenant_id = r.tenant_id AND m.user_id = %s
+                      AND m.status = 'active' AND m.role IN ('owner', 'admin'))
+                RETURNING r.target_user_id""",
+            (approver_user_id, request_id, tenant_id, approver_user_id, approver_user_id),
+        )
+        row = cursor.fetchone()
+        if row is None:
+            return None
+        target = str(row[0])
+        cursor.execute(
+            """UPDATE operator_totp_factors SET status = 'revoked',
+                      revoked_at = now(), pending_expires_at = NULL
+                WHERE user_id = %s AND status IN ('active', 'pending')""", (target,),
+        )
+        cursor.execute(
+            """UPDATE operator_webauthn_credentials SET status = 'revoked', revoked_at = now()
+                WHERE user_id = %s AND status = 'active'""", (target,),
+        )
+        cursor.execute(
+            "UPDATE operator_mfa_recovery_codes SET consumed_at = now() WHERE user_id = %s AND consumed_at IS NULL",
+            (target,),
+        )
+        cursor.execute(
+            "UPDATE operator_mfa_challenges SET consumed_at = now() WHERE user_id = %s AND consumed_at IS NULL",
+            (target,),
+        )
+        cursor.execute(
+            "UPDATE operator_sessions SET revoked_at = now() WHERE user_id = %s AND revoked_at IS NULL",
+            (target,),
+        )
+        cursor.execute(
+            "UPDATE operator_mfa_reset_requests SET status = 'completed', completed_at = now() WHERE id = %s AND status = 'approved'",
+            (request_id,),
+        )
+        return target
+    finally:
+        cursor.close()

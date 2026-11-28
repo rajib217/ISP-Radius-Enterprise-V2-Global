@@ -27,7 +27,7 @@ from isp_radius.persistence.operator_repository import (
     activate_operator_totp_factor,
     clear_operator_login_failures,
     consume_operator_login_mfa_challenge,
-    consume_operator_mfa_challenge,
+    consume_operator_mfa_challenge,\n    consume_operator_recovery_code,\n    has_available_operator_recovery_codes,\n    replace_operator_recovery_codes,\n    create_operator_factor_reset_request,\n    approve_operator_factor_reset,
     create_operator_login_mfa_challenge,
     create_operator_mfa_challenge,
     create_operator_session,
@@ -48,7 +48,7 @@ from isp_radius.persistence.operator_repository import (
     record_operator_mfa_challenge_failure,
     record_operator_totp_enrollment_failure,
     resolve_operator_session,
-    revoke_operator_mfa_challenges,
+    revoke_operator_mfa_challenges,\n    revoke_operator_sessions_for_user,
     revoke_operator_session,
     update_operator_webauthn_credential_after_assertion,
 )
@@ -73,7 +73,7 @@ from isp_radius.security.operator_mfa import (
     encrypt_totp_secret,
     generate_totp_secret,
     totp_provisioning_uri,
-    verify_totp,
+    verify_totp,\n    generate_recovery_codes,\n    hash_recovery_code,
 )
 from isp_radius.security.webauthn import (
     WebAuthnVerificationError,
@@ -423,6 +423,19 @@ async def operator_login(
                                 login_totp_fallback = base64.urlsafe_b64encode(
                                     totp_challenge
                                 ).rstrip(b"=").decode("ascii")
+
+                            if has_available_operator_recovery_codes(connection, user_id=str(user_id)):
+                                recovery_challenge = generate_webauthn_challenge()
+                                create_operator_login_mfa_challenge(
+                                    connection, user_id=str(user_id), tenant_id=str(membership[4]),
+                                    challenge_hash=hash_webauthn_challenge(recovery_challenge),
+                                    origin=origin, rp_id=rp_id,
+                                    expires_at=datetime.now(UTC) + timedelta(minutes=5),
+                                    method="recovery",
+                                )
+                                login_recovery_fallback = base64.urlsafe_b64encode(
+                                    recovery_challenge
+                                ).rstrip(b"=").decode("ascii")
                         else:
                             totp_factor = find_active_operator_totp_factor(
                                 connection, user_id=str(user_id),
@@ -447,6 +460,36 @@ async def operator_login(
                                 )
                                 encoded_challenge = base64.urlsafe_b64encode(challenge).rstrip(b"=").decode("ascii")
                                 login_mfa_data = (encoded_challenge, {"method": "totp"})
+                                if has_available_operator_recovery_codes(connection, user_id=str(user_id)):
+                                    recovery_challenge = generate_webauthn_challenge()
+                                    create_operator_login_mfa_challenge(
+                                        connection, user_id=str(user_id), tenant_id=str(membership[4]),
+                                        challenge_hash=hash_webauthn_challenge(recovery_challenge),
+                                        origin=origin, rp_id=rp_id,
+                                        expires_at=datetime.now(UTC) + timedelta(minutes=5),
+                                        method="recovery",
+                                    )
+                                    login_recovery_fallback = base64.urlsafe_b64encode(
+                                        recovery_challenge
+                                    ).rstrip(b"=").decode("ascii")
+                            elif has_available_operator_recovery_codes(connection, user_id=str(user_id)):
+                                challenge = generate_webauthn_challenge()
+                                origin, rp_id = _operator_webauthn_config(request)
+                                create_operator_login_mfa_challenge(
+                                    connection, user_id=str(user_id), tenant_id=str(membership[4]),
+                                    challenge_hash=hash_webauthn_challenge(challenge),
+                                    origin=origin, rp_id=rp_id,
+                                    expires_at=datetime.now(UTC) + timedelta(minutes=5),
+                                    method="recovery",
+                                )
+                                clear_operator_login_failures(connection, email_hash=email_hash, ip_hash=ip_hash)
+                                insert_operator_audit_event(
+                                    connection, tenant_id=str(membership[4]), actor_user_id=str(user_id),
+                                    actor_kind="operator", action="auth.login.mfa_challenge_issued",
+                                    remote_ip=remote_ip, metadata={"method": "recovery"},
+                                )
+                                encoded_challenge = base64.urlsafe_b64encode(challenge).rstrip(b"=").decode("ascii")
+                                login_mfa_data = (encoded_challenge, {"method": "recovery"})
                             else:
                                 # Temporary bootstrap path: accounts without an enrolled factor can enroll.
                                 # Production MFA enforcement remains disabled until bootstrap/recovery is complete.
@@ -492,14 +535,19 @@ async def operator_login(
         raise HTTPException(status_code=login_error[0], detail=login_error[1])
     if login_mfa_data is not None:
         challenge, options = login_mfa_data
-        if options.get("method") == "totp":
-            return {"mfa_required": True, "method": "totp", "challenge": challenge}
+        if options.get("method") in {"totp", "recovery"}:
+            result = {"mfa_required": True, "method": str(options["method"]), "challenge": challenge}
+            if login_recovery_fallback is not None:
+                result["recovery_fallback"] = {"method": "recovery", "challenge": login_recovery_fallback}
+            return result
         result: dict[str, object] = {
             "mfa_required": True, "method": "webauthn",
             "challenge": challenge, "publicKey": options,
         }
         if login_totp_fallback is not None:
             result["totp_fallback"] = {"method": "totp", "challenge": login_totp_fallback}
+        if login_recovery_fallback is not None:
+            result["recovery_fallback"] = {"method": "recovery", "challenge": login_recovery_fallback}
         return result
     if session_data is None:
         raise HTTPException(status_code=401, detail="Invalid email or password")
@@ -983,6 +1031,188 @@ async def operator_totp_enroll_verify(
             remote_ip=_operator_client_ip(request), metadata={"method": "totp"},
         )
     return {"status": "active", "method": "totp"}
+
+
+@app.post("/operator/recovery-codes/generate")
+async def operator_recovery_codes_generate(
+    request: Request,
+    x_csrf_token: str | None = Header(default=None),
+    principal: OperatorPrincipal = _operator_principal_dependency_injected,
+    connection: psycopg.Connection = _database_dependency,
+) -> dict[str, object]:
+    """Replace the recovery batch after password re-authentication; show plaintext once."""
+    _operator_csrf_guard(request, principal, x_csrf_token)
+    raw = await request.body()
+    if len(raw) > 4096:
+        raise HTTPException(status_code=413, detail="Request too large")
+    try:
+        payload = json.loads(raw)
+    except (UnicodeDecodeError, json.JSONDecodeError):
+        raise HTTPException(status_code=400, detail="Invalid recovery-code request") from None
+    password = payload.get("password") if isinstance(payload, dict) else None
+    password_row = find_operator_password_hash(connection, user_id=principal.user_id)
+    if (
+        not isinstance(password, str) or not password or len(password) > 1024
+        or password_row is None or password_row[1] != "active"
+        or not verify_operator_password(password_row[0], password)
+    ):
+        raise HTTPException(status_code=401, detail="Password re-authentication failed")
+    codes = generate_recovery_codes()
+    batch_id = str(uuid4())
+    with connection.transaction():
+        replace_operator_recovery_codes(
+            connection, user_id=principal.user_id, batch_id=batch_id,
+            code_hashes=[hash_recovery_code(code) for code in codes],
+        )
+        insert_operator_audit_event(
+            connection, tenant_id=principal.tenant_id, actor_user_id=principal.user_id,
+            actor_kind="operator", action="auth.recovery_codes.generated",
+            remote_ip=_operator_client_ip(request), target_type="operator_mfa_recovery_batch",
+            target_id=batch_id, metadata={"count": 10, "display": "once"},
+        )
+    return {"batch_id": batch_id, "codes": list(codes), "display_once": True}
+
+
+@app.post("/operator/login/recovery/verify")
+async def operator_login_recovery_verify(
+    request: Request,
+    response: Response,
+    connection: psycopg.Connection = _database_dependency,
+) -> dict[str, object]:
+    """Redeem one code against the short-lived login challenge, exactly once."""
+    _operator_origin_guard(request)
+    secure = _operator_cookie_secure()
+    origin, rp_id = _operator_webauthn_config(request)
+    raw = await request.body()
+    if len(raw) > 4096:
+        raise HTTPException(status_code=413, detail="Request too large")
+    try:
+        payload = json.loads(raw)
+        challenge = _decode_webauthn_challenge(payload.get("challenge"))
+        code_hash = hash_recovery_code(payload.get("code"))
+    except (UnicodeDecodeError, json.JSONDecodeError, AttributeError, TypeError, ValueError):
+        raise HTTPException(status_code=400, detail="Invalid recovery request") from None
+    digest = hash_webauthn_challenge(challenge)
+    with connection.transaction():
+        pending = find_pending_operator_login_mfa_challenge(
+            connection, challenge_hash=digest, origin=origin, rp_id=rp_id, method="recovery",
+        )
+        if pending is None:
+            raise HTTPException(status_code=400, detail="Recovery challenge is invalid or expired")
+        _challenge_id, user_id, tenant_id = pending
+        batch_id = consume_operator_recovery_code(
+            connection, user_id=str(user_id), code_hash=code_hash,
+        )
+        if batch_id is None:
+            record_operator_mfa_challenge_failure(connection, challenge_hash=digest)
+            insert_operator_audit_event(
+                connection, tenant_id=str(tenant_id), actor_user_id=str(user_id),
+                actor_kind="operator", action="auth.recovery_code.failed",
+                remote_ip=_operator_client_ip(request), metadata={"reason": "invalid_or_used"},
+            )
+            raise HTTPException(status_code=401, detail="Recovery code is invalid or already used")
+        consumed = consume_operator_login_mfa_challenge(
+            connection, challenge_hash=digest, origin=origin, rp_id=rp_id, method="recovery",
+        )
+        if consumed is None:
+            raise HTTPException(status_code=409, detail="Recovery challenge was already used")
+        membership = find_operator_tenant_membership(
+            connection, user_id=str(user_id), tenant_id=str(tenant_id),
+        )
+        if membership is None:
+            raise HTTPException(status_code=401, detail="Operator membership is no longer active")
+        revoke_operator_mfa_challenges(connection, user_id=str(user_id))
+        revoke_operator_sessions_for_user(connection, user_id=str(user_id))
+        tokens = issue_session_tokens()
+        create_operator_session(
+            connection, user_id=str(user_id), tenant_id=str(tenant_id),
+            token_hash=tokens.session_hash, csrf_token_hash=tokens.csrf_hash,
+            expires_at=tokens.expires_at, remote_ip=_operator_client_ip(request),
+            user_agent=request.headers.get("user-agent"),
+        )
+        insert_operator_audit_event(
+            connection, tenant_id=str(tenant_id), actor_user_id=str(user_id),
+            actor_kind="operator", action="auth.recovery_code.redeemed",
+            remote_ip=_operator_client_ip(request), target_type="operator_mfa_recovery_batch",
+            target_id=str(batch_id), metadata={"prior_sessions_revoked": True},
+        )
+    response.set_cookie("operator_session", tokens.session_token, max_age=43200,
+        httponly=True, secure=secure, samesite="lax", path="/")
+    response.set_cookie("operator_csrf", tokens.csrf_token, max_age=43200,
+        httponly=False, secure=secure, samesite="lax", path="/")
+    return {
+        "operator": {"email": str(membership[0]), "tenant_id": str(tenant_id), "role": str(membership[1])},
+        "csrf_token": tokens.csrf_token, "expires_at": tokens.expires_at.isoformat(),
+    }
+
+
+@app.post("/operator/mfa/reset-requests")
+async def operator_mfa_reset_request(
+    request: Request,
+    x_csrf_token: str | None = Header(default=None),
+    principal: OperatorPrincipal = _operator_principal_dependency_injected,
+    connection: psycopg.Connection = _database_dependency,
+) -> dict[str, object]:
+    """Request a high-risk reset that requires a second owner/admin."""
+    _operator_csrf_guard(request, principal, x_csrf_token)
+    if principal.role not in {"owner", "admin"}:
+        raise HTTPException(status_code=403, detail="Owner or admin role required")
+    try:
+        payload = await request.json()
+        target = str(UUID(payload.get("target_user_id")))
+        reason = payload.get("reason")
+    except (ValueError, TypeError, AttributeError):
+        raise HTTPException(status_code=400, detail="Invalid reset request") from None
+    if not isinstance(reason, str) or not reason.strip() or len(reason) > 500:
+        raise HTTPException(status_code=400, detail="A reason of 1 to 500 characters is required")
+    request_id = str(uuid4())
+    with connection.transaction():
+        created = create_operator_factor_reset_request(
+            connection, request_id=request_id, tenant_id=principal.tenant_id,
+            target_user_id=target, requester_user_id=principal.user_id,
+            reason=reason, expires_at=datetime.now(UTC) + timedelta(hours=24),
+        )
+        if not created:
+            raise HTTPException(status_code=400, detail="Target must be another active tenant member")
+        insert_operator_audit_event(
+            connection, tenant_id=principal.tenant_id, actor_user_id=principal.user_id,
+            actor_kind="operator", action="auth.mfa.reset.requested",
+            remote_ip=_operator_client_ip(request), target_type="operator_mfa_reset_request",
+            target_id=request_id, metadata={"reason": reason},
+        )
+    return {"request_id": request_id, "status": "pending", "expires_in_seconds": 86400}
+
+
+@app.post("/operator/mfa/reset-requests/{request_id}/approve")
+async def operator_mfa_reset_approve(
+    request_id: str,
+    request: Request,
+    x_csrf_token: str | None = Header(default=None),
+    principal: OperatorPrincipal = _operator_principal_dependency_injected,
+    connection: psycopg.Connection = _database_dependency,
+) -> dict[str, object]:
+    """A different active owner/admin approves and executes the reset atomically."""
+    _operator_csrf_guard(request, principal, x_csrf_token)
+    if principal.role not in {"owner", "admin"}:
+        raise HTTPException(status_code=403, detail="Owner or admin role required")
+    try:
+        normalized = str(UUID(request_id))
+    except (ValueError, TypeError):
+        raise HTTPException(status_code=400, detail="Invalid reset request ID") from None
+    with connection.transaction():
+        target = approve_operator_factor_reset(
+            connection, request_id=normalized, tenant_id=principal.tenant_id,
+            approver_user_id=principal.user_id,
+        )
+        if target is None:
+            raise HTTPException(status_code=409, detail="Request expired, unavailable, or self-approval denied")
+        insert_operator_audit_event(
+            connection, tenant_id=principal.tenant_id, actor_user_id=principal.user_id,
+            actor_kind="operator", action="auth.mfa.reset.approved_and_executed",
+            remote_ip=_operator_client_ip(request), target_type="operator_user",
+            target_id=target, metadata={"request_id": normalized},
+        )
+    return {"status": "completed", "target_user_id": target, "reauthentication_required": True}
 
 
 @app.post("/operator/webauthn/register/options")

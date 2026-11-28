@@ -180,3 +180,33 @@ def decrypt_totp_secret(
     except InvalidTag:
         raise ValueError("TOTP secret authentication failed") from None
     return base64.b32encode(plaintext).decode("ascii").rstrip("=")
+
+
+def generate_recovery_codes(*, count: int = 10) -> tuple[str, ...]:
+    """Generate ten unique 144-bit codes for one-time offline storage."""
+    import secrets
+
+    if count != 10:
+        raise ValueError("recovery code batches must contain exactly ten codes")
+    return tuple(
+        "-".join(
+            secrets.token_hex(18).upper()[i:i + 6]
+            for i in range(0, 36, 6)
+        )
+        for _ in range(count)
+    )
+
+
+def normalize_recovery_code(code: str) -> str:
+    """Normalize a code while rejecting all characters outside its alphabet."""
+    if not isinstance(code, str):
+        raise ValueError("invalid recovery code")
+    value = code.replace("-", "").replace(" ", "").upper()
+    if len(value) != 36 or any(ch not in "0123456789ABCDEF" for ch in value):
+        raise ValueError("invalid recovery code")
+    return value
+
+
+def hash_recovery_code(code: str) -> str:
+    """Return the SHA-256 digest of a normalized 144-bit recovery code."""
+    return hashlib.sha256(normalize_recovery_code(code).encode("ascii")).hexdigest()

@@ -3,7 +3,7 @@
 ## Baseline
 
 - Target: PostgreSQL 16 or newer.
-- Apply every numbered migration from 0001 through 0018 in filename order.
+- Apply every numbered migration from 0001 through 0019 in filename order.
 - These migrations assume an empty database for the baseline. Migrations 0013 through 0015 are additive and do not rewrite subscriber or financial data.
 - Take and verify a backup before applying migrations to any non-empty environment.
 - Apply each migration once, in filename order, using a database role limited to schema changes.
@@ -84,3 +84,8 @@ field NULL. Existing challenges remain valid and are not rewritten.
 
 Adds a bounded failed-verification counter to pending TOTP factors. Five invalid
 codes revoke the pending factor so enrollment cannot be brute-forced indefinitely.
+
+
+## 0019: Recovery and administrative factor reset
+
+Recovery generation requires password re-authentication, replaces the previous batch, and displays ten 144-bit codes once. Only SHA-256 digests are stored. Login offers a five-minute tenant-bound recovery challenge; each code is consumed atomically once. Successful recovery revokes all prior sessions and pending challenges before issuing a new session. Factor reset requires a reason and a second distinct active owner/admin in the same tenant. Approval and revocation of TOTP, passkeys, recovery codes, challenges and sessions run in one transaction. The affected operator must enroll a new factor after reset. Production MFA enforcement remains disabled pending PostgreSQL concurrency and operational recovery testing.
