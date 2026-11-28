@@ -210,7 +210,7 @@ def clear_operator_login_failures(
 
 def create_operator_login_mfa_challenge(
     connection: Any, *, user_id: str, tenant_id: str, challenge_hash: str,
-    origin: str, rp_id: str, expires_at: Any,
+    origin: str, rp_id: str, expires_at: Any, method: str = "webauthn",
 ) -> str:
     """Persist a login challenge bound to both operator and selected tenant."""
     challenge_id = str(uuid4())
@@ -220,9 +220,9 @@ def create_operator_login_mfa_challenge(
             """
             INSERT INTO operator_mfa_challenges
                 (id, user_id, tenant_id, challenge_hash, method, origin, rp_id, expires_at)
-            VALUES (%s, %s, %s, %s, 'webauthn', %s, %s, %s)
+            VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
             """,
-            (challenge_id, user_id, tenant_id, challenge_hash, origin, rp_id, expires_at),
+            (challenge_id, user_id, tenant_id, challenge_hash, method, origin, rp_id, expires_at),
         )
     finally:
         cursor.close()
@@ -231,6 +231,7 @@ def create_operator_login_mfa_challenge(
 
 def find_pending_operator_login_mfa_challenge(
     connection: Any, *, challenge_hash: str, origin: str, rp_id: str,
+    method: str = "webauthn",
 ) -> tuple[Any, ...] | None:
     """Fetch an unconsumed login challenge and its server-bound tenant."""
     cursor = _cursor(connection)
@@ -239,12 +240,12 @@ def find_pending_operator_login_mfa_challenge(
             """
             SELECT id, user_id, tenant_id
               FROM operator_mfa_challenges
-             WHERE challenge_hash = %s AND method = 'webauthn'
+             WHERE challenge_hash = %s AND method = %s
                AND tenant_id IS NOT NULL AND origin = %s AND rp_id = %s
                AND consumed_at IS NULL AND expires_at > now() AND failed_attempts < 5
-             LIMIT 1
+             LIMIT 1 FOR UPDATE
             """,
-            (challenge_hash, origin, rp_id),
+            (challenge_hash, method, origin, rp_id),
         )
         return cursor.fetchone()
     finally:
@@ -253,6 +254,7 @@ def find_pending_operator_login_mfa_challenge(
 
 def consume_operator_login_mfa_challenge(
     connection: Any, *, challenge_hash: str, origin: str, rp_id: str,
+    method: str = "webauthn",
 ) -> tuple[Any, ...] | None:
     """Atomically consume a login challenge and return its bound identity/tenant."""
     cursor = _cursor(connection)
@@ -261,12 +263,12 @@ def consume_operator_login_mfa_challenge(
             """
             UPDATE operator_mfa_challenges
                SET consumed_at = now()
-             WHERE challenge_hash = %s AND method = 'webauthn' AND tenant_id IS NOT NULL
+             WHERE challenge_hash = %s AND method = %s AND tenant_id IS NOT NULL
                AND origin = %s AND rp_id = %s AND consumed_at IS NULL
                AND expires_at > now() AND failed_attempts < 5
             RETURNING id, user_id, tenant_id
             """,
-            (challenge_hash, origin, rp_id),
+            (challenge_hash, method, origin, rp_id),
         )
         return cursor.fetchone()
     finally:
@@ -350,6 +352,92 @@ def record_operator_mfa_challenge_failure(connection: Any, *, challenge_hash: st
             RETURNING id
             """,
             (challenge_hash,),
+        )
+        return cursor.fetchone() is not None
+    finally:
+        cursor.close()
+
+
+def create_operator_totp_factor(
+    connection: Any, *, factor_id: str, user_id: str, ciphertext: bytes, nonce: bytes,
+    wrapped_data_key: bytes, key_version: str, pending_expires_at: Any,
+) -> str:
+    """Persist only encrypted TOTP material as a pending factor."""
+    cursor = _cursor(connection)
+    try:
+        cursor.execute(
+            """
+            INSERT INTO operator_totp_factors (
+                id, user_id, secret_ciphertext, nonce, wrapped_data_key,
+                key_version, status, pending_expires_at
+            ) VALUES (%s, %s, %s, %s, %s, %s, 'pending', %s)
+            """,
+            (factor_id, user_id, ciphertext, nonce, wrapped_data_key, key_version, pending_expires_at),
+        )
+    finally:
+        cursor.close()
+    return factor_id
+
+
+def find_pending_operator_totp_factor(
+    connection: Any, *, factor_id: str, user_id: str,
+) -> tuple[Any, ...] | None:
+    """Fetch an unexpired pending factor owned by the operator."""
+    cursor = _cursor(connection)
+    try:
+        cursor.execute(
+            """
+            SELECT id, user_id, secret_ciphertext, nonce, wrapped_data_key, key_version
+              FROM operator_totp_factors
+             WHERE id = %s AND user_id = %s AND status = 'pending'
+               AND pending_expires_at > now()
+             LIMIT 1
+            """,
+            (factor_id, user_id),
+        )
+        return cursor.fetchone()
+    finally:
+        cursor.close()
+
+
+def find_active_operator_totp_factor(
+    connection: Any, *, user_id: str,
+) -> tuple[Any, ...] | None:
+    """Fetch the single active encrypted TOTP factor for an operator."""
+    cursor = _cursor(connection)
+    try:
+        cursor.execute(
+            """
+            SELECT id, user_id, secret_ciphertext, nonce, wrapped_data_key, key_version
+              FROM operator_totp_factors
+             WHERE user_id = %s AND status = 'active'
+             LIMIT 1
+            """,
+            (user_id,),
+        )
+        return cursor.fetchone()
+    finally:
+        cursor.close()
+
+
+def activate_operator_totp_factor(
+    connection: Any, *, factor_id: str, user_id: str, accepted_step: int,
+) -> bool:
+    """Activate a verified pending factor and consume its enrollment time step."""
+    if accepted_step < 0:
+        raise ValueError("TOTP time step must be non-negative")
+    cursor = _cursor(connection)
+    try:
+        cursor.execute(
+            """
+            UPDATE operator_totp_factors
+               SET status = 'active', pending_expires_at = NULL,
+                   activated_at = now(), last_accepted_step = %s
+             WHERE id = %s AND user_id = %s AND status = 'pending'
+               AND pending_expires_at > now()
+            RETURNING id
+            """,
+            (accepted_step, factor_id, user_id),
         )
         return cursor.fetchone() is not None
     finally:
