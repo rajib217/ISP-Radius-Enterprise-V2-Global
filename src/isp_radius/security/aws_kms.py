@@ -29,8 +29,13 @@ class AwsKmsDataKeyProvider:
             import boto3
         except ImportError as exc:
             raise RuntimeError("Install the aws-kms optional dependency to enable TOTP") from exc
+        from botocore.exceptions import BotoCoreError
+
         region = os.environ.get("AWS_REGION") or os.environ.get("AWS_DEFAULT_REGION")
-        client = boto3.client("kms", region_name=region)
+        try:
+            client = boto3.client("kms", region_name=region)
+        except BotoCoreError as exc:
+            raise RuntimeError("Unable to initialize AWS KMS client") from exc
         return cls(client, key_id=key_id)
 
     def generate_data_key(self) -> tuple[bytes, bytes, str]:
