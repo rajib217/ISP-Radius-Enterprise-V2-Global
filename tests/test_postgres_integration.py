@@ -50,6 +50,8 @@ def test_all_migrations_and_accounting_session_lifecycle():
         )
 
         # Operator identity, tenant membership, opaque sessions and immutable audit.
+        from isp_radius.aaa.authentication import hash_subscriber_password
+
         operator_id = str(uuid4())
         membership_session_id = str(uuid4())
         connection.execute(
@@ -86,20 +88,20 @@ def test_all_migrations_and_accounting_session_lifecycle():
             """,
             (audit_id, tenant_id, operator_id),
         )
-        with connection.transaction():
-            with pytest.raises(psycopg.errors.RaiseException):
+        with pytest.raises(psycopg.errors.RaiseException):
+            with connection.transaction():
                 connection.execute(
                     "UPDATE operator_audit_events SET action = 'tampered' WHERE id = %s",
                     (audit_id,),
                 )
-        with connection.transaction():
-            with pytest.raises(psycopg.errors.RaiseException):
+        with pytest.raises(psycopg.errors.RaiseException):
+            with connection.transaction():
                 connection.execute(
                     "DELETE FROM operator_audit_events WHERE id = %s",
                     (audit_id,),
                 )
-        with connection.transaction():
-            with pytest.raises(psycopg.errors.UniqueViolation):
+        with pytest.raises(psycopg.errors.UniqueViolation):
+            with connection.transaction():
                 connection.execute(
                     """
                     INSERT INTO operator_users (id, email, password_hash)
