@@ -86,7 +86,7 @@ def verify_webauthn_registration(
             credential_id=result.credential_id,
             credential_public_key=result.credential_public_key,
             sign_count=result.sign_count,
-            device_type=str(result.credential_device_type),
+            device_type=str(getattr(result.credential_device_type, "value", result.credential_device_type)),
             backed_up=bool(result.credential_backed_up),
         )
     except Exception as exc:
@@ -127,7 +127,7 @@ def verify_webauthn_authentication(
             raise WebAuthnVerificationError("WebAuthn user verification is required")
         return VerifiedAuthentication(
             new_sign_count=result.new_sign_count,
-            device_type=str(result.credential_device_type),
+            device_type=str(getattr(result.credential_device_type, "value", result.credential_device_type)),
             backed_up=bool(result.credential_backed_up),
             user_verified=bool(result.user_verified),
         )

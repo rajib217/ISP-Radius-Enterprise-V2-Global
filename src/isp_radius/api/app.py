@@ -529,9 +529,17 @@ async def operator_login_webauthn_verify(
             encoded_credential_id.encode("ascii")
             + b"=" * (-len(encoded_credential_id) % 4), altchars=b"-_", validate=True,
         )
+        encoded_id = credential.get("id")
+        decoded_id = (
+            base64.b64decode(
+                encoded_id.encode("ascii") + b"=" * (-len(encoded_id) % 4),
+                altchars=b"-_", validate=True,
+            )
+            if isinstance(encoded_id, str) else raw_id
+        )
     except (UnicodeEncodeError, binascii.Error, ValueError):
         raise HTTPException(status_code=400, detail="Invalid passkey credential ID") from None
-    if not raw_id or len(raw_id) > 1024:
+    if not raw_id or len(raw_id) > 1024 or decoded_id != raw_id:
         raise HTTPException(status_code=400, detail="Invalid passkey credential ID")
 
     login_error: tuple[int, str] | None = None
@@ -549,6 +557,11 @@ async def operator_login_webauthn_verify(
             )
             if credential_row is None or str(credential_row[1]) != str(user_id):
                 record_operator_mfa_challenge_failure(connection, challenge_hash=challenge_hash)
+                insert_operator_audit_event(
+                    connection, tenant_id=str(tenant_id), actor_user_id=str(user_id),
+                    actor_kind="operator", action="auth.login.mfa_failed",
+                    remote_ip=_operator_client_ip(request), metadata={"method": "webauthn"},
+                )
                 login_error = (401, "Passkey authentication failed")
             else:
                 try:

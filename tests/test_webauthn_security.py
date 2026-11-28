@@ -190,3 +190,26 @@ def test_authentication_options_reject_empty_credential_list():
         generate_authentication_options_json(
             rp_id="example.com", challenge=b"c" * 32, allowed_credential_ids=(),
         )
+
+
+def test_webauthn_device_type_enum_is_normalized(monkeypatch):
+    from enum import Enum
+
+    class DeviceType(str, Enum):
+        MULTI_DEVICE = "multi_device"
+
+    def verify(**kwargs):
+        return SimpleNamespace(
+            credential_id=b"credential", credential_public_key=b"public-key",
+            sign_count=0, credential_device_type=DeviceType.MULTI_DEVICE,
+            credential_backed_up=True,
+        )
+
+    monkeypatch.setitem(sys.modules, "webauthn", SimpleNamespace(
+        verify_registration_response=verify
+    ))
+    result = verify_webauthn_registration(
+        credential={}, expected_challenge=b"c" * 32,
+        expected_origin="https://console.example.com", rp_id="example.com",
+    )
+    assert result.device_type == "multi_device"
