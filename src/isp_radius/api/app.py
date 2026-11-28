@@ -232,6 +232,9 @@ def require_operator_permission(permission: str):
     return dependency
 
 
+_operator_sessions_read_dependency = Depends(
+    require_operator_permission("sessions:read")
+)
 _operator_principal_dependency_injected = Depends(_operator_principal_dependency)
 
 
@@ -457,7 +460,7 @@ def operator_logout(
 
 @app.get("/operator/monitoring/sessions")
 def operator_monitoring_sessions(
-    principal: OperatorPrincipal = Depends(require_operator_permission("sessions:read")),
+    principal: OperatorPrincipal = _operator_sessions_read_dependency,
     state: str | None = Query(default=None),
     search: str | None = Query(default=None, max_length=128),
     nas_identifier: str | None = Query(default=None, max_length=253),
@@ -485,7 +488,7 @@ def operator_monitoring_sessions(
 
 @app.get("/operator/monitoring/sessions/summary")
 def operator_monitoring_session_summary(
-    principal: OperatorPrincipal = Depends(require_operator_permission("sessions:read")),
+    principal: OperatorPrincipal = _operator_sessions_read_dependency,
     stale_after_seconds: int = Query(default=300, ge=30, le=86400),
     connection: psycopg.Connection = _database_dependency,
 ) -> dict[str, int]:
