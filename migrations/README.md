@@ -70,3 +70,11 @@ Adds the KMS-wrapped AES-256 data key to operator TOTP factor records. TOTP
 secrets are encrypted with AES-256-GCM using a fresh data key and nonce; the
 wrapped data key is stored separately and can only be unwrapped by the configured
 KMS provider. Migration 0016 is additive and precedes any TOTP enrollment flow.
+
+
+## 0017: Tenant-bound operator login MFA challenges
+
+Adds an optional tenant reference to MFA challenges. Login challenges must bind
+the selected tenant at password-authentication time so the assertion response
+cannot choose or switch tenant membership. Enrollment challenges leave this
+field NULL. Existing challenges remain valid and are not rewritten.

@@ -26,13 +26,19 @@ from isp_radius.persistence.operator_repository import (
     clear_operator_login_failures,
     consume_operator_mfa_challenge,
     create_operator_mfa_challenge,
+    create_operator_login_mfa_challenge,
     create_operator_session,
     create_operator_webauthn_credential,
     find_operator_memberships,
+    find_operator_tenant_membership,
     find_operator_password_hash,
+    find_pending_operator_login_mfa_challenge,
     find_pending_operator_mfa_challenge,
     insert_operator_audit_event,
     list_active_operator_webauthn_credential_ids,
+    find_active_operator_webauthn_credential,
+    update_operator_webauthn_credential_after_assertion,
+    consume_operator_login_mfa_challenge,
     operator_login_rate_limited,
     record_operator_login_failure,
     record_operator_mfa_challenge_failure,
@@ -56,9 +62,11 @@ from isp_radius.security.operator_auth import (
 )
 from isp_radius.security.webauthn import (
     WebAuthnVerificationError,
+    generate_authentication_options_json,
     generate_registration_options_json,
     generate_webauthn_challenge,
     hash_webauthn_challenge,
+    verify_webauthn_authentication,
     verify_webauthn_registration,
 )
 
@@ -292,6 +300,7 @@ async def operator_login(
     email_hash = hash_token(f"{email}:{ip_hash}")
     login_error: tuple[int, object] | None = None
     session_data: tuple[object, ...] | None = None
+    login_mfa_data: tuple[str, dict[str, object]] | None = None
 
     with connection.transaction():
         if operator_login_rate_limited(
@@ -348,7 +357,46 @@ async def operator_login(
                         )
                     if login_error is None:
                         membership = selected[0]
-                        tokens = issue_session_tokens()
+                        credential_ids = list_active_operator_webauthn_credential_ids(
+                            connection, user_id=str(user_id),
+                        )
+                        if credential_ids:
+                            challenge = generate_webauthn_challenge()
+                            origin, rp_id = _operator_webauthn_config(request)
+                            try:
+                                options = json.loads(generate_authentication_options_json(
+                                    rp_id=rp_id, challenge=challenge,
+                                    allowed_credential_ids=credential_ids,
+                                ))
+                                if not isinstance(options, dict) or not isinstance(options.get("challenge"), str):
+                                    raise TypeError("Malformed authentication options")
+                                returned_challenge = _decode_webauthn_challenge(options["challenge"])
+                                if not hmac.compare_digest(returned_challenge, challenge):
+                                    raise ValueError("Authentication options challenge mismatch")
+                            except (ValueError, TypeError, WebAuthnVerificationError):
+                                raise HTTPException(
+                                    status_code=503, detail="Unable to start passkey authentication",
+                                ) from None
+                            create_operator_login_mfa_challenge(
+                                connection, user_id=str(user_id), tenant_id=str(membership[4]),
+                                challenge_hash=hash_webauthn_challenge(challenge),
+                                origin=origin, rp_id=rp_id,
+                                expires_at=datetime.now(UTC) + timedelta(minutes=5),
+                            )
+                            clear_operator_login_failures(
+                                connection, email_hash=email_hash, ip_hash=ip_hash,
+                            )
+                            insert_operator_audit_event(
+                                connection, tenant_id=str(membership[4]), actor_user_id=str(user_id),
+                                actor_kind="operator", action="auth.login.mfa_challenge_issued",
+                                remote_ip=remote_ip, metadata={"method": "webauthn"},
+                            )
+                            encoded_challenge = base64.urlsafe_b64encode(challenge).rstrip(b"=").decode("ascii")
+                            login_mfa_data = (encoded_challenge, options)
+                        else:
+                            # Temporary bootstrap path: accounts without a passkey can enroll.
+                            # Production MFA enforcement remains disabled until fallback/recovery exists.
+                            tokens = issue_session_tokens()
                         existing_token = request.cookies.get("operator_session")
                         if existing_token:
                             try:
@@ -388,6 +436,9 @@ async def operator_login(
 
     if login_error is not None:
         raise HTTPException(status_code=login_error[0], detail=login_error[1])
+    if login_mfa_data is not None:
+        challenge, options = login_mfa_data
+        return {"mfa_required": True, "method": "webauthn", "challenge": challenge, "publicKey": options}
     if session_data is None:
         raise HTTPException(status_code=401, detail="Invalid email or password")
 
@@ -447,6 +498,145 @@ def _decode_webauthn_challenge(value: object) -> bytes:
     if len(decoded) != 32:
         raise HTTPException(status_code=400, detail="Invalid WebAuthn challenge")
     return decoded
+
+
+@app.post("/operator/login/webauthn/verify")
+async def operator_login_webauthn_verify(
+    request: Request,
+    response: Response,
+    connection: psycopg.Connection = _database_dependency,
+) -> dict[str, object]:
+    """Complete password-plus-passkey login before issuing any operator session."""
+    _operator_origin_guard(request)
+    secure = _operator_cookie_secure()
+    origin, rp_id = _operator_webauthn_config(request)
+    raw_body = await request.body()
+    if len(raw_body) > 16384:
+        raise HTTPException(status_code=413, detail="Request too large")
+    try:
+        payload = json.loads(raw_body)
+    except (UnicodeDecodeError, json.JSONDecodeError):
+        raise HTTPException(status_code=400, detail="Invalid passkey response") from None
+    if not isinstance(payload, dict) or not isinstance(payload.get("credential"), dict):
+        raise HTTPException(status_code=400, detail="Invalid passkey response")
+    challenge = _decode_webauthn_challenge(payload.get("challenge"))
+    challenge_hash = hash_webauthn_challenge(challenge)
+    credential = payload["credential"]
+    encoded_credential_id = credential.get("rawId") or credential.get("id")
+    if not isinstance(encoded_credential_id, str) or not 2 <= len(encoded_credential_id) <= 1400:
+        raise HTTPException(status_code=400, detail="Invalid passkey credential ID")
+    try:
+        raw_id = base64.b64decode(
+            encoded_credential_id.encode("ascii")
+            + b"=" * (-len(encoded_credential_id) % 4), altchars=b"-_", validate=True,
+        )
+    except (UnicodeEncodeError, binascii.Error, ValueError):
+        raise HTTPException(status_code=400, detail="Invalid passkey credential ID") from None
+    if not raw_id or len(raw_id) > 1024:
+        raise HTTPException(status_code=400, detail="Invalid passkey credential ID")
+
+    login_error: tuple[int, str] | None = None
+    session_data: tuple[object, ...] | None = None
+    with connection.transaction():
+        pending = find_pending_operator_login_mfa_challenge(
+            connection, challenge_hash=challenge_hash, origin=origin, rp_id=rp_id,
+        )
+        if pending is None:
+            login_error = (400, "Passkey login challenge is invalid or expired")
+        else:
+            challenge_id, user_id, tenant_id = pending
+            credential_row = find_active_operator_webauthn_credential(
+                connection, credential_id=raw_id,
+            )
+            if credential_row is None or str(credential_row[1]) != str(user_id):
+                record_operator_mfa_challenge_failure(connection, challenge_hash=challenge_hash)
+                login_error = (401, "Passkey authentication failed")
+            else:
+                try:
+                    verified = verify_webauthn_authentication(
+                        credential=credential,
+                        expected_challenge=challenge,
+                        expected_origin=origin,
+                        rp_id=rp_id,
+                        credential_public_key=credential_row[2],
+                        credential_current_sign_count=int(credential_row[3]),
+                        require_user_verification=True,
+                    )
+                except (WebAuthnVerificationError, ValueError):
+                    record_operator_mfa_challenge_failure(connection, challenge_hash=challenge_hash)
+                    insert_operator_audit_event(
+                        connection, tenant_id=str(tenant_id), actor_user_id=str(user_id),
+                        actor_kind="operator", action="auth.login.mfa_failed",
+                        remote_ip=_operator_client_ip(request), metadata={"method": "webauthn"},
+                    )
+                    login_error = (401, "Passkey authentication failed")
+                else:
+                    consumed = consume_operator_login_mfa_challenge(
+                        connection, challenge_hash=challenge_hash, origin=origin, rp_id=rp_id,
+                    )
+                    if (
+                        consumed is None or str(consumed[0]) != str(challenge_id)
+                        or str(consumed[1]) != str(user_id) or str(consumed[2]) != str(tenant_id)
+                    ):
+                        login_error = (409, "Passkey login challenge was already used")
+                    elif not update_operator_webauthn_credential_after_assertion(
+                        connection, credential_row_id=str(credential_row[0]),
+                        user_id=str(user_id), new_sign_count=verified.new_sign_count,
+                        backup_eligible=verified.device_type == "multi_device",
+                        backup_state=verified.backed_up,
+                    ):
+                        login_error = (401, "Passkey credential is no longer active")
+                    else:
+                        membership = find_operator_tenant_membership(
+                            connection, user_id=str(user_id), tenant_id=str(tenant_id),
+                        )
+                        if membership is None:
+                            login_error = (403, "Tenant membership is no longer active")
+                        else:
+                            canonical_email, role = membership
+                            tokens = issue_session_tokens()
+                            existing_token = request.cookies.get("operator_session")
+                            if existing_token:
+                                try:
+                                    revoke_operator_session(
+                                        connection, token_hash=hash_token(existing_token),
+                                    )
+                                except ValueError:
+                                    pass
+                            session_id = create_operator_session(
+                                connection, user_id=str(user_id), tenant_id=str(tenant_id),
+                                token_hash=tokens.session_hash, csrf_token_hash=tokens.csrf_hash,
+                                expires_at=tokens.expires_at, remote_ip=_operator_client_ip(request),
+                                user_agent=request.headers.get("user-agent"),
+                            )
+                            insert_operator_audit_event(
+                                connection, tenant_id=str(tenant_id), actor_user_id=str(user_id),
+                                actor_kind="operator", action="auth.login.succeeded",
+                                remote_ip=_operator_client_ip(request), target_type="operator_session",
+                                target_id=session_id,
+                                metadata={"role": str(role), "method": "webauthn",
+                                          "credential_id_sha256": hashlib.sha256(raw_id).hexdigest()},
+                            )
+                            session_data = (str(canonical_email), str(tenant_id), str(role), tokens)
+
+    if login_error is not None:
+        raise HTTPException(status_code=login_error[0], detail=login_error[1])
+    if session_data is None:
+        raise HTTPException(status_code=401, detail="Passkey authentication failed")
+    canonical_email, tenant_id, role, tokens = session_data
+    response.set_cookie(
+        "operator_session", tokens.session_token, max_age=43200,
+        httponly=True, secure=secure, samesite="lax", path="/",
+    )
+    response.set_cookie(
+        "operator_csrf", tokens.csrf_token, max_age=43200,
+        httponly=False, secure=secure, samesite="lax", path="/",
+    )
+    return {
+        "operator": {"email": canonical_email, "tenant_id": tenant_id, "role": role},
+        "csrf_token": tokens.csrf_token,
+        "expires_at": tokens.expires_at.isoformat(),
+    }
 
 
 @app.post("/operator/webauthn/register/options")

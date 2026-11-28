@@ -208,6 +208,93 @@ def clear_operator_login_failures(
 
 
 
+def create_operator_login_mfa_challenge(
+    connection: Any, *, user_id: str, tenant_id: str, challenge_hash: str,
+    origin: str, rp_id: str, expires_at: Any,
+) -> str:
+    """Persist a login challenge bound to both operator and selected tenant."""
+    challenge_id = str(uuid4())
+    cursor = _cursor(connection)
+    try:
+        cursor.execute(
+            """
+            INSERT INTO operator_mfa_challenges
+                (id, user_id, tenant_id, challenge_hash, method, origin, rp_id, expires_at)
+            VALUES (%s, %s, %s, %s, 'webauthn', %s, %s, %s)
+            """,
+            (challenge_id, user_id, tenant_id, challenge_hash, origin, rp_id, expires_at),
+        )
+    finally:
+        cursor.close()
+    return challenge_id
+
+
+def find_pending_operator_login_mfa_challenge(
+    connection: Any, *, challenge_hash: str, origin: str, rp_id: str,
+) -> tuple[Any, ...] | None:
+    """Fetch an unconsumed login challenge and its server-bound tenant."""
+    cursor = _cursor(connection)
+    try:
+        cursor.execute(
+            """
+            SELECT id, user_id, tenant_id
+              FROM operator_mfa_challenges
+             WHERE challenge_hash = %s AND method = 'webauthn'
+               AND tenant_id IS NOT NULL AND origin = %s AND rp_id = %s
+               AND consumed_at IS NULL AND expires_at > now() AND failed_attempts < 5
+             LIMIT 1
+            """,
+            (challenge_hash, origin, rp_id),
+        )
+        return cursor.fetchone()
+    finally:
+        cursor.close()
+
+
+def consume_operator_login_mfa_challenge(
+    connection: Any, *, challenge_hash: str, origin: str, rp_id: str,
+) -> tuple[Any, ...] | None:
+    """Atomically consume a login challenge and return its bound identity/tenant."""
+    cursor = _cursor(connection)
+    try:
+        cursor.execute(
+            """
+            UPDATE operator_mfa_challenges
+               SET consumed_at = now()
+             WHERE challenge_hash = %s AND method = 'webauthn' AND tenant_id IS NOT NULL
+               AND origin = %s AND rp_id = %s AND consumed_at IS NULL
+               AND expires_at > now() AND failed_attempts < 5
+            RETURNING id, user_id, tenant_id
+            """,
+            (challenge_hash, origin, rp_id),
+        )
+        return cursor.fetchone()
+    finally:
+        cursor.close()
+
+
+def find_operator_tenant_membership(
+    connection: Any, *, user_id: str, tenant_id: str,
+) -> tuple[Any, ...] | None:
+    """Resolve an active user and tenant membership after MFA succeeds."""
+    cursor = _cursor(connection)
+    try:
+        cursor.execute(
+            """
+            SELECT u.email, m.role
+              FROM operator_users AS u
+              JOIN operator_tenant_memberships AS m ON m.user_id = u.id
+             WHERE u.id = %s AND m.tenant_id = %s
+               AND u.status = 'active' AND m.status = 'active'
+             LIMIT 1
+            """,
+            (user_id, tenant_id),
+        )
+        return cursor.fetchone()
+    finally:
+        cursor.close()
+
+
 def create_operator_mfa_challenge(
     connection: Any, *, user_id: str, challenge_hash: str, method: str,
     origin: str, rp_id: str, expires_at: Any,
@@ -387,6 +474,7 @@ def find_active_operator_webauthn_credential(
               FROM operator_webauthn_credentials
              WHERE credential_id = %s AND status = 'active'
              LIMIT 1
+             FOR UPDATE
             """,
             (credential_id,),
         )
